@@ -106,10 +106,17 @@ const MarkdownClipboard = Extension.create({
 export interface MarkdownEditorExtensionsOptions {
   placeholder?: string;
   shortcuts?: EditorShortcutCallbacks;
+  /**
+   * Ekstensi tambahan milik pemanggil.
+   *
+   * Editor bab memerlukan cari dan ganti yang hanya hidup di lingkup penulisan, sehingga ekstensi
+   * itu disisipkan dari luar alih-alih ditarik ke modul bersama ini.
+   */
+  additionalExtensions?: unknown[];
 }
 
 export function createMarkdownEditorExtensions(options: MarkdownEditorExtensionsOptions = {}) {
-  const { placeholder = "", shortcuts } = options;
+  const { placeholder = "", shortcuts, additionalExtensions } = options;
 
   const extensions = [
     StarterKit.configure({
@@ -134,6 +141,10 @@ export function createMarkdownEditorExtensions(options: MarkdownEditorExtensions
 
   if (shortcuts) {
     extensions.push(createEditorShortcuts(shortcuts));
+  }
+
+  if (additionalExtensions?.length) {
+    extensions.push(...(additionalExtensions as typeof extensions));
   }
 
   return extensions;

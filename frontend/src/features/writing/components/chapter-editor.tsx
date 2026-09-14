@@ -1,6 +1,6 @@
 import { Box, Flex, Text } from "@radix-ui/themes";
 import { useQuery } from "@tanstack/react-query";
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import { AtSign } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
@@ -17,14 +17,14 @@ import {
 } from "@/features/assistant/lib/mention-text";
 import { fetchSettings } from "@/features/settings/lib/settings-api";
 import { useScrollbarAutoHide } from "@/hooks/use-scrollbar-auto-hide";
-import { fetchChapter } from "@/lib/api-client";
+import { fetchChapter, fetchProject } from "@/lib/api-client";
+import { DEFAULT_BOOK_TYPE, type BookType } from "@/lib/book-type.types";
 import type { Chapter } from "@/lib/chapter.types";
 import {
   getEditorContentLimit,
   MAX_EDITOR_CONTENT_CHARACTERS,
   MAX_EDITOR_CONTENT_LINES,
 } from "@/lib/editor-content-limits";
-import { htmlToNewlines, newlinesToHtml } from "@/lib/html-utils";
 import { createToastThrottler } from "@/lib/ui-utils";
 
 import { useAutoSave } from "../hooks/use-auto-save";
@@ -38,8 +38,14 @@ import {
   type WritingDraft,
   type WritingWorkingCopyController,
 } from "../hooks/use-writing-working-copy";
+import {
+  createChapterEditorExtensions,
+  isMarkdownChapterFormat,
+  readChapterEditorContent,
+  setChapterEditorContent,
+  toChapterEditorContent,
+} from "../lib/chapter-content-format";
 import { createChapterEditorDraft, isChapterEditorDraftDirty } from "../lib/chapter-editor-draft";
-import { createEditorExtensions } from "../lib/editor-config";
 import {
   getNextWritingWorkingCopyTimestamp,
   isRemoteWritingEntityNewer,
@@ -72,6 +78,8 @@ interface ChapterEditorProps {
 
 interface ChapterEditorContentProps {
   chapter: Chapter;
+  /** Jenis buku proyek, menentukan format penyimpanan dan ekstensi editor isi bab */
+  bookType: BookType;
   scrollTop: number;
   initialDraft: WritingDraft;
   initialDraftUpdatedAt: Date;
@@ -86,6 +94,7 @@ interface ChapterEditorContentProps {
 
 function ChapterEditorContent({
   chapter,
+  bookType,
   scrollTop,
   initialDraft,
   initialDraftUpdatedAt,
@@ -111,7 +120,14 @@ function ChapterEditorContent({
     queryKey: ["settings"],
     queryFn: fetchSettings,
   });
-  const showLineNumbers = settings?.editorShowLineNumbers ?? false;
+  // Bentuk penyimpanan isi bab menentukan alat format mana yang berguna: proyek fiksi memakai
+  // indentasi paragraf, sedangkan non-fiksi memerlukan judul, tabel, dan daftar.
+  const isMarkdown = isMarkdownChapterFormat(bookType);
+
+  // Penomoran baris hanya menghitung paragraf tingkat teratas, sehingga pada naskah bermarkdown
+  // judul, tabel, dan daftar terlewati dan nomornya menyesatkan. Karena itu penomoran dibatasi pada
+  // proyek fiksi yang isinya memang prosa datar.
+  const showLineNumbers = (settings?.editorShowLineNumbers ?? false) && !isMarkdown;
   const autoIndentRef = useRef(settings?.editorAutoIndent ?? false);
   const autoConvertPunctuationRef = useRef(settings?.editorAutoConvertPunctuation ?? false);
   const autoPairSymbolsRef = useRef(settings?.editorAutoPairSymbols ?? false);
@@ -225,10 +241,12 @@ function ChapterEditorContent({
   );
 
   const updateDirtyState = useCallback(
-    (nextTitle: string, nextHtmlContent: string) => {
+    // Isi yang diterima sudah berbentuk seperti yang disimpan basis data, sehingga fungsi ini tidak
+    // perlu mengetahui jenis buku maupun bentuk tampilan editornya.
+    (nextTitle: string, nextStoredContent: string) => {
       const nextDraft = createChapterEditorDraft({
         title: nextTitle,
-        content: htmlToNewlines(nextHtmlContent),
+        content: nextStoredContent,
       });
       const isDirty = isChapterEditorDraftDirty(lastSavedDraftRef.current, nextDraft);
       latestDraftRef.current = nextDraft;
@@ -243,14 +261,14 @@ function ChapterEditorContent({
   );
 
   const syncDirtyStateFromEditor = useCallback(
-    (editorInstance: { getHTML: () => string }) => {
-      return updateDirtyState(titleRef.current, editorInstance.getHTML());
+    (editorInstance: Editor) => {
+      return updateDirtyState(titleRef.current, readChapterEditorContent(bookType, editorInstance));
     },
-    [updateDirtyState],
+    [bookType, updateDirtyState],
   );
 
   const editor = useEditor({
-    extensions: createEditorExtensions({
+    extensions: createChapterEditorExtensions(bookType, {
       placeholder: t("writing.contentPlaceholder"),
       autoIndent: () => autoIndentRef.current,
       autoConvertPunctuation: () => autoConvertPunctuationRef.current,
@@ -268,7 +286,8 @@ function ChapterEditorContent({
       },
     }),
     editable: !isAgentLocked,
-    content: initialDraft.content ? newlinesToHtml(initialDraft.content) : "",
+    content: toChapterEditorContent(bookType, initialDraft.content),
+    contentType: isMarkdown ? "markdown" : undefined,
     onUpdate: ({ editor }) => {
       if (isAgentLocked) return;
       syncDirtyStateFromEditor(editor);
@@ -411,8 +430,9 @@ function ChapterEditorContent({
     }
 
     const nextTitle = chapter.title;
-    const nextContent = chapter.content ? newlinesToHtml(chapter.content) : "";
-    const currentContent = editor.getHTML();
+    // Pembandingan dilakukan pada bentuk tersimpan, bukan bentuk tampilan, karena serialisasi
+    // Markdown dapat menormalkan penulisan tanpa mengubah maknanya.
+    const currentContent = readChapterEditorContent(bookType, editor);
     lastSavedDraftRef.current = createChapterEditorDraft({
       title: nextTitle,
       content: chapter.content,
@@ -429,8 +449,8 @@ function ChapterEditorContent({
       });
     }
 
-    if (currentContent !== nextContent) {
-      editor.commands.setContent(nextContent, { emitUpdate: false });
+    if (currentContent !== chapter.content) {
+      setChapterEditorContent(bookType, editor, chapter.content);
       setLineNumberDigits(getLineNumberDigits(editor.state.doc.childCount));
       queueMicrotask(() => {
         setWordCount(wordsCount(editor.getText()));
@@ -438,6 +458,7 @@ function ChapterEditorContent({
     }
   }, [
     editor,
+    bookType,
     chapter.title,
     chapter.content,
     chapter.id,
@@ -501,7 +522,7 @@ function ChapterEditorContent({
     setTitle(newTitle);
     titleRef.current = newTitle;
     if (editor) {
-      updateDirtyState(newTitle, editor.getHTML());
+      updateDirtyState(newTitle, readChapterEditorContent(bookType, editor));
     } else {
       const draft = createChapterEditorDraft({
         title: newTitle,
@@ -624,7 +645,8 @@ function ChapterEditorContent({
         onLockedAction={showLockedToast}
         onOpenFind={openFind}
         onOpenReplace={openReplace}
-        showChapterTools
+        showChapterTools={!isMarkdown}
+        showMarkdownTools={isMarkdown}
       />
 
       <AnimatePresence>
@@ -732,6 +754,14 @@ export function ChapterEditor({
     entityId: chapterId,
     fetchEntity: fetchChapter,
   });
+  const projectId = data?.entity.projectId;
+  // Jenis buku menentukan ekstensi editor, dan ekstensi hanya dibaca sekali saat editor dibuat.
+  // Karena itu nilainya wajib sudah tersedia sebelum editor dirakit, bukan menyusul setelahnya.
+  const { data: project, isPending: isProjectPending } = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: () => fetchProject(projectId!),
+    enabled: !!projectId,
+  });
 
   if (!chapterId) {
     return (
@@ -750,7 +780,9 @@ export function ChapterEditor({
     );
   }
 
-  if (shouldShowWritingEditorLoading(data)) {
+  // Editor ditahan sampai jenis buku diketahui, sebab merakitnya lebih dulu berarti ekstensinya
+  // terpasang untuk format yang salah dan tidak akan pernah berganti sesudahnya.
+  if (shouldShowWritingEditorLoading(data) || isProjectPending) {
     return (
       <Flex
         align="center"
@@ -762,10 +794,13 @@ export function ChapterEditor({
     );
   }
 
+  const bookType = project?.bookType ?? DEFAULT_BOOK_TYPE;
+
   return (
     <ChapterEditorWorkingCopy
-      key={`${data.entity.id}:${data.draftUpdatedAt.getTime()}`}
+      key={`${data.entity.id}:${bookType}:${data.draftUpdatedAt.getTime()}`}
       chapter={data.entity}
+      bookType={bookType}
       scrollTop={scrollTop}
       initialDraft={data.draft}
       initialDraftUpdatedAt={data.draftUpdatedAt}
@@ -781,6 +816,7 @@ export function ChapterEditor({
 
 function ChapterEditorWorkingCopy({
   chapter,
+  bookType,
   scrollTop,
   initialDraft,
   initialDraftUpdatedAt,
@@ -800,6 +836,7 @@ function ChapterEditorWorkingCopy({
     <ChapterEditorContent
       key={`${chapter.id}:${initialDraftUpdatedAt.getTime()}`}
       chapter={chapter}
+      bookType={bookType}
       scrollTop={scrollTop}
       initialDraft={initialDraft}
       initialDraftUpdatedAt={initialDraftUpdatedAt}
