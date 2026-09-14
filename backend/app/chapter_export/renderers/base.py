@@ -85,6 +85,46 @@ def _normalize_title_for_comparison(value: str) -> str:
     return _TITLE_SPACES.sub(" ", folded).strip()
 
 
+_ATX_HEADING_LINE = re.compile(r"^#{1,6}[ \t]+(?P<text>.*?)[ \t]*#*[ \t]*$")
+_SETEXT_UNDERLINE_LINE = re.compile(r"^(?:=+|-{2,})[ \t]*$")
+
+
+def strip_duplicate_title_text(content: str, title: str) -> str:
+    """Membuang judul markdown pembuka yang hanya mengulang judul bab dari teks mentahnya.
+
+    Rekan fungsi ini di tataran blok melayani penulis format yang merakit dokumen dari AST.
+    Penulis TXT menuliskan markdown apa adanya, sehingga tanpa pembuangan di tataran teks judul
+    bab akan tampak dua kali: sekali dari medan judul, sekali dari judul markdown pertama.
+    """
+    lines = content.split("\n")
+    index = 0
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    if index >= len(lines):
+        return content
+
+    heading = _ATX_HEADING_LINE.match(lines[index].strip())
+    consumed = index + 1
+    if heading is not None:
+        heading_text = heading.group("text")
+    elif (
+        index + 1 < len(lines)
+        and _SETEXT_UNDERLINE_LINE.match(lines[index + 1].strip())
+        and lines[index].strip()
+    ):
+        heading_text = lines[index].strip()
+        consumed = index + 2
+    else:
+        return content
+
+    if _normalize_title_for_comparison(heading_text) != _normalize_title_for_comparison(title):
+        return content
+
+    while consumed < len(lines) and not lines[consumed].strip():
+        consumed += 1
+    return "\n".join(lines[consumed:])
+
+
 def strip_duplicate_title_heading(
     blocks: tuple[DocumentBlock, ...],
     title: str,
@@ -170,6 +210,9 @@ async def iter_export_chapters(context, payload: dict[str, Any]) -> AsyncIterato
             blocks: tuple[DocumentBlock, ...] = ()
             if parse_as_markdown:
                 blocks = strip_duplicate_title_heading(parse_markdown_blocks(content), title)
+                # Penulis TXT menuliskan markdown apa adanya, sehingga judul ganda perlu dibuang
+                # dari teksnya juga, bukan hanya dari AST yang dipakai penulis DOCX dan PDF.
+                content = strip_duplicate_title_text(content, title)
 
             yield RenderedChapter(
                 title=title,

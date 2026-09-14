@@ -14,6 +14,7 @@ from app.background.jobs import service as background_service
 from app.background.runtime.context import JobContext
 from app.background.runtime.dispatcher import dispatch_job
 from app.chapter_export import service as chapter_export_service
+from app.chapter_export.renderers import base as export_base
 from app.chapter_export.renderers import pdf as pdf_renderer
 from app.background.jobs.models import BackgroundJob
 from app.api.routers import chapter_exports as chapter_exports_router
@@ -675,6 +676,105 @@ async def test_docx_export_skips_heading_that_repeats_chapter_title(
     ]
     # Hanya judul volume dan judul bab yang tersisa; judul markdown kembar tidak ikut tertulis.
     assert headings == ["Volume 1", "Bab 1: Paradoks Meta-Kepemimpinan - Memimpin Mereka"]
+
+
+@pytest.mark.asyncio
+async def test_txt_export_skips_heading_that_repeats_chapter_title(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Penulis TXT menuliskan markdown apa adanya, jadi judul kembar harus dibuang dari teksnya."""
+
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(
+        client, title="Buku Panduan", book_type="non_fiction"
+    )
+    await _create_chapter(
+        client,
+        project_id,
+        volume_id,
+        "Bab 1: Paradoks Meta-Kepemimpinan - Memimpin Mereka",
+        "# BAB 1: PARADOKS META-KEPEMIMPINAN: MEMIMPIN MEREKA\n\nIsi bab.",
+        8,
+    )
+
+    _result, job = await _run_export_job(client, session, project_id, volume_id, "txt")
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id, "txt")
+
+    assert output_path.read_text(encoding="utf-8-sig") == (
+        "Volume 1\nBab 1: Paradoks Meta-Kepemimpinan - Memimpin Mereka\nIsi bab."
+    )
+
+
+@pytest.mark.asyncio
+async def test_txt_export_keeps_heading_that_differs_from_chapter_title(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Hanya judul kembar yang dibuang; judul bagian pembuka yang berbeda tetap tertulis."""
+
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(
+        client, title="Buku Panduan", book_type="non_fiction"
+    )
+    await _create_chapter(
+        client, project_id, volume_id, "Bab 1", "# Pengantar Terpisah\n\nIsi bab.", 6
+    )
+
+    _result, job = await _run_export_job(client, session, project_id, volume_id, "txt")
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id, "txt")
+
+    assert output_path.read_text(encoding="utf-8-sig") == (
+        "Volume 1\nBab 1\n# Pengantar Terpisah\n\nIsi bab."
+    )
+
+
+@pytest.mark.asyncio
+async def test_txt_export_keeps_hash_line_for_fiction_project(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Proyek fiksi menyimpan prosa polos, sehingga isinya tidak boleh ditafsirkan sebagai markdown."""
+
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(client)
+    await _create_chapter(client, project_id, volume_id, "Bab 1", "# Bab 1\nIsi bab.", 5)
+
+    _result, job = await _run_export_job(client, session, project_id, volume_id, "txt")
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id, "txt")
+
+    assert output_path.read_text(encoding="utf-8-sig") == "Volume 1\nBab 1\n# Bab 1\nIsi bab."
+
+
+def test_strip_duplicate_title_text_handles_heading_shapes() -> None:
+    """Judul ATX dan setext yang kembar dibuang, sisanya dibiarkan utuh."""
+    strip = export_base.strip_duplicate_title_text
+
+    assert strip("# BAB 1: PARADOKS: MEMIMPIN\n\nIsi.", "Bab 1: Paradoks - Memimpin") == "Isi."
+    assert strip("Bab 3\n=====\n\nIsi.", "Bab 3") == "Isi."
+    assert strip("## Bab 2\nIsi.", "Bab 2") == "Isi."
+    # Judul yang berbeda, teks tanpa judul, dan isi kosong tidak boleh berubah.
+    assert strip("# Judul Lain\n\nIsi.", "Bab 4") == "# Judul Lain\n\nIsi."
+    assert strip("Tanpa judul markdown.", "Bab 5") == "Tanpa judul markdown."
+    assert strip("", "Bab 6") == ""
 
 
 @pytest.mark.asyncio
