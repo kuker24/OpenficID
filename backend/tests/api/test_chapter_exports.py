@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """Pengujian API ekspor bab."""
 
+from datetime import UTC, datetime, timedelta
+import json
+
 import pytest
 from httpx import AsyncClient
 from urllib.parse import unquote
@@ -331,4 +334,82 @@ async def test_cleanup_keeps_output_while_export_is_still_running(
     output_path.write_text("finished but not committed", encoding="utf-8")
 
     assert await chapter_export_service.cleanup_chapter_export_files(session) == 0
+    assert output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_succeeded_output_until_ttl_expires(
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Berkas hasil tugas sukses harus bertahan selama masa berlaku unduhan belum lewat."""
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    expires_at = datetime.now(UTC) + timedelta(hours=12)
+    job = BackgroundJob(
+        id="fresh-succeeded-export",
+        type=chapter_export_service.EXPORT_JOB_TYPE,
+        status="succeeded",
+        payload_json='{"filename":"uji.txt"}',
+        result_json=json.dumps({"expires_at": expires_at.isoformat()}),
+    )
+    session.add(job)
+    await session.commit()
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id)
+    output_path.write_text("hasil ekspor", encoding="utf-8")
+
+    assert await chapter_export_service.cleanup_chapter_export_files(session) == 0
+    assert output_path.exists()
+    assert chapter_export_service.is_export_download_available(job)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_succeeded_output_after_ttl_expires(
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Berkas hasil tugas sukses harus disapu setelah masa berlaku unduhan lewat."""
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    job = BackgroundJob(
+        id="stale-succeeded-export",
+        type=chapter_export_service.EXPORT_JOB_TYPE,
+        status="succeeded",
+        payload_json='{"filename":"uji.txt"}',
+        result_json=json.dumps({"expires_at": expires_at.isoformat()}),
+    )
+    session.add(job)
+    await session.commit()
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id)
+    output_path.write_text("hasil kedaluwarsa", encoding="utf-8")
+
+    assert await chapter_export_service.cleanup_chapter_export_files(session) == 1
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_leftover_part_file_of_succeeded_export(
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Berkas sementara milik tugas sukses adalah sisa gagal rename dan harus dihapus."""
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    expires_at = datetime.now(UTC) + timedelta(hours=12)
+    job = BackgroundJob(
+        id="succeeded-with-part",
+        type=chapter_export_service.EXPORT_JOB_TYPE,
+        status="succeeded",
+        payload_json='{"filename":"uji.txt"}',
+        result_json=json.dumps({"expires_at": expires_at.isoformat()}),
+    )
+    session.add(job)
+    await session.commit()
+    part_path, output_path = chapter_export_service.export_file_paths(job.id)
+    part_path.write_text("sisa berkas sementara", encoding="utf-8")
+    output_path.write_text("hasil ekspor", encoding="utf-8")
+
+    assert await chapter_export_service.cleanup_chapter_export_files(session) == 1
+    assert not part_path.exists()
     assert output_path.exists()

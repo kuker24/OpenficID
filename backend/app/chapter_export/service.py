@@ -29,6 +29,11 @@ EXPORT_JOB_TYPE = "chapter_export"
 EXPORT_FILE_PREFIX = "chapter-export-"
 EXPORT_FILE_TTL = timedelta(hours=24)
 EXPORT_BATCH_SIZE = 20
+EXPORT_PART_SUFFIX = ".part"
+# Setiap format keluaran baru wajib terdaftar di sini. Suffix yang tidak dikenal membuat berkasnya
+# terlewat oleh pembersihan berkala sehingga menumpuk di disk tanpa pernah kedaluwarsa.
+OUTPUT_SUFFIXES = frozenset({".txt"})
+MANAGED_SUFFIXES = OUTPUT_SUFFIXES | {EXPORT_PART_SUFFIX}
 
 
 class ChapterExportSelectionError(ValueError):
@@ -120,7 +125,7 @@ def export_file_paths(job_id: str) -> tuple[Path, Path]:
     """Mengembalikan path berkas sementara dan berkas hasil untuk tugas ini."""
     directory = ensure_chapter_exports_dir()
     basename = f"{EXPORT_FILE_PREFIX}{job_id}"
-    return directory / f"{basename}.part", directory / f"{basename}.txt"
+    return directory / f"{basename}{EXPORT_PART_SUFFIX}", directory / f"{basename}.txt"
 
 
 def sanitize_filename_segment(value: str, fallback: str) -> str:
@@ -375,13 +380,18 @@ async def cleanup_chapter_export_files(session: AsyncSession) -> int:
         job = await background_service.get_job(session, job_id)
         should_keep = False
         if job is not None and job.type == EXPORT_JOB_TYPE:
-            if path.suffix in {".part", ".txt"}:
-                should_keep = job.status in {
-                    JOB_STATUS_PENDING,
-                    JOB_STATUS_RUNNING,
-                    JOB_STATUS_CANCEL_REQUESTED,
-                }
-            elif path.suffix == ".txt" and job.status == JOB_STATUS_SUCCEEDED:
+            # Percabangan wajib memeriksa status lebih dulu. Menyaring berdasarkan suffix lebih dulu
+            # membuat cabang masa berlaku tidak pernah terjangkau, sehingga berkas hasil tugas yang
+            # sukses tersapu pada sapuan watchdog berikutnya walau umurnya masih jauh dari batas.
+            if job.status in {
+                JOB_STATUS_PENDING,
+                JOB_STATUS_RUNNING,
+                JOB_STATUS_CANCEL_REQUESTED,
+            }:
+                should_keep = True
+            elif job.status == JOB_STATUS_SUCCEEDED and path.suffix in OUTPUT_SUFFIXES:
+                # Berkas sementara milik tugas sukses adalah sisa rename yang gagal, bukan hasil,
+                # sehingga hanya berkas hasil yang berhak bertahan sampai masa berlakunya lewat.
                 expires_at = _parse_datetime(
                     background_service.parse_json_object(job.result_json).get("expires_at")
                 )
@@ -421,7 +431,7 @@ def _parse_datetime(value: object) -> datetime | None:
 
 
 def _job_id_from_export_path(path: Path) -> str | None:
-    if path.suffix not in {".part", ".txt"} or not path.name.startswith(EXPORT_FILE_PREFIX):
+    if path.suffix not in MANAGED_SUFFIXES or not path.name.startswith(EXPORT_FILE_PREFIX):
         return None
     job_id = path.name[len(EXPORT_FILE_PREFIX) : -len(path.suffix)]
     return job_id or None
