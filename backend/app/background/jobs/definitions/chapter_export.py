@@ -10,6 +10,7 @@ from app.background.jobs.constants import JOB_QUEUE_DEFAULT, JOB_TYPE_CHAPTER_EX
 from app.background.runtime.context import JobContext
 from app.chapter_export import service as chapter_export_service
 from app.chapter_export.service import ExportFormat
+from app.core.book_type import DEFAULT_BOOK_TYPE, BookType
 
 
 class ChapterExportChapterInput(BaseModel):
@@ -31,6 +32,9 @@ class ChapterExportInput(BaseModel):
     filename: str
     # Tugas yang dibuat sebelum format dapat dipilih tidak memuat medan ini.
     format: ExportFormat = "txt"
+    # Jenis buku dibekukan bersama lingkup ekspor agar hasil berkas tidak berubah bila proyek
+    # disunting saat tugas masih menunggu. Tugas lama tidak memuatnya, jadi bawaannya fiksi.
+    book_type: BookType = DEFAULT_BOOK_TYPE
     mode: str
     chapters: list[ChapterExportChapterInput] = Field(min_length=1)
     volumes: list[ChapterExportVolumeInput]

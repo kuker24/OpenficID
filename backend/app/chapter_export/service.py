@@ -27,6 +27,7 @@ from app.chapter_export.renderers.base import volume_number as volume_number
 from app.chapter_export.renderers.docx import render_docx
 from app.chapter_export.renderers.pdf import render_pdf
 from app.chapter_export.renderers.txt import render_txt
+from app.core.book_type import book_type_or_default
 from app.settings import settings
 from app.storage.repos import chapter_repo, project_repo, volume_repo
 
@@ -117,6 +118,9 @@ class ChapterExportPlan:
     project_id: str
     filename: str
     export_format: str
+    # Jenis buku dibekukan bersama lingkup ekspor, sama seperti judul bab, sehingga hasil berkas
+    # tidak berubah bila proyek disunting saat tugas masih menunggu antrean.
+    book_type: str
     mode: str
     chapters: list[ExportChapter]
     volumes: list[ExportVolume]
@@ -142,6 +146,7 @@ class ChapterExportPlan:
             "project_id": self.project_id,
             "filename": self.filename,
             "format": self.export_format,
+            "book_type": self.book_type,
             "mode": self.mode,
             "chapters": [chapter.to_dict() for chapter in self.chapters],
             "volumes": [volume.to_dict() for volume in self.volumes],
@@ -256,6 +261,7 @@ async def create_export_plan(
         project_id=project_id,
         filename=f"{project_title}-{filename_label}-{local_date}{suffix}",
         export_format=normalized_format,
+        book_type=book_type_or_default(project.book_type),
         mode=mode,
         chapters=[
             ExportChapter(

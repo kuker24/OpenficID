@@ -9,9 +9,18 @@ menerjemahkan payload tugas sendiri.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, AsyncIterator, Protocol
+import unicodedata
 
 from app.background.jobs import service as background_service
+from app.chapter_export.markdown_blocks import (
+    DocumentBlock,
+    HeadingBlock,
+    parse_markdown_blocks,
+    spans_to_text,
+)
+from app.core.book_type import book_type_or_default, uses_markdown_content
 from app.storage.repos import chapter_repo
 
 
@@ -26,6 +35,9 @@ class RenderedChapter:
     content: str
     volume_heading: str | None
     is_first: bool
+    # Terisi hanya bagi proyek non-fiksi. Proyek fiksi menyimpan prosa polos, sehingga penulis
+    # format cukup membaca `content` baris demi baris seperti sebelumnya.
+    blocks: tuple[DocumentBlock, ...] = ()
 
 
 class ChapterExportRenderContext(Protocol):
@@ -60,6 +72,42 @@ def normalize_chapter_content(value: str) -> str:
     return value.replace("\r\n", "\n").replace("\r", "\n")
 
 
+# Tanda baca yang lazim berbeda antara judul tersimpan dan judul yang dituliskan model, misalnya
+# "Bab 1: Paradoks - Memimpin" berbanding "BAB 1: PARADOKS: MEMIMPIN".
+_TITLE_PUNCTUATION = re.compile(r"[:\-\u2013\u2014&.,;'\"()\[\]]+")
+_TITLE_SPACES = re.compile(r"\s+")
+
+
+def _normalize_title_for_comparison(value: str) -> str:
+    """Meluruhkan judul menjadi bentuk yang dapat dibandingkan lintas gaya penulisan."""
+    folded = unicodedata.normalize("NFKC", value).casefold()
+    folded = _TITLE_PUNCTUATION.sub(" ", folded)
+    return _TITLE_SPACES.sub(" ", folded).strip()
+
+
+def strip_duplicate_title_heading(
+    blocks: tuple[DocumentBlock, ...],
+    title: str,
+) -> tuple[DocumentBlock, ...]:
+    """Membuang judul pembuka yang hanya mengulang judul bab.
+
+    Judul bab sudah tersimpan pada medannya sendiri dan selalu ditulis ulang oleh penulis format,
+    sehingga judul markdown pertama yang isinya sama hanya akan tampak sebagai judul ganda. Hanya
+    judul di posisi paling awal yang diperiksa, agar judul bagian yang kebetulan bernama serupa di
+    tengah naskah tetap terjaga.
+    """
+    if not blocks:
+        return blocks
+    first = blocks[0]
+    if not isinstance(first, HeadingBlock):
+        return blocks
+    if _normalize_title_for_comparison(spans_to_text(first.spans)) != (
+        _normalize_title_for_comparison(title)
+    ):
+        return blocks
+    return blocks[1:]
+
+
 async def iter_export_chapters(context, payload: dict[str, Any]) -> AsyncIterator[RenderedChapter]:
     """Memuat isi bab per potongan lalu melaporkan kemajuan setelah tiap potongan tertulis.
 
@@ -76,6 +124,9 @@ async def iter_export_chapters(context, payload: dict[str, Any]) -> AsyncIterato
         if isinstance(chapter_id, str)
     }
     mode = payload.get("mode")
+    # Jenis buku dibekukan pada payload saat tugas dibuat, sehingga penulis format tidak perlu
+    # menyentuh basis data untuk mengetahuinya.
+    parse_as_markdown = uses_markdown_content(book_type_or_default(payload.get("book_type")))
     written_count = 0
     last_group_id: str | None = None
 
@@ -115,11 +166,17 @@ async def iter_export_chapters(context, payload: dict[str, Any]) -> AsyncIterato
                     volume_heading = volume_export_heading(order, volume_title)
                     last_group_id = group_id
 
+            content = normalize_chapter_content(chapter.content)
+            blocks: tuple[DocumentBlock, ...] = ()
+            if parse_as_markdown:
+                blocks = strip_duplicate_title_heading(parse_markdown_blocks(content), title)
+
             yield RenderedChapter(
                 title=title,
-                content=normalize_chapter_content(chapter.content),
+                content=content,
                 volume_heading=volume_heading,
                 is_first=written_count == 0,
+                blocks=blocks,
             )
             written_count += 1
 

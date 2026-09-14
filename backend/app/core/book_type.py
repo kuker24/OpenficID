@@ -61,6 +61,23 @@ def normalize_book_type(value: str | None) -> BookType:
     )
 
 
+def book_type_or_default(value: object) -> BookType:
+    """Membaca jenis buku tanpa pernah gagal, memakai bawaan bila nilainya tidak dapat dipercaya.
+
+    Dipakai di jalur yang tidak boleh berhenti hanya karena satu kolom rusak, misalnya pembangunan
+    konteks agen dan perakitan berkas ekspor. Menolak pekerjaan di sana hanya akan menghambat
+    pengguna tanpa menjelaskan sebabnya, sedangkan memakai bawaan mengembalikan perilaku yang sama
+    seperti sebelum jenis buku ada. Jalur yang menerima masukan pengguna tetap memakai
+    normalize_book_type agar salah ketik tertangkap sebagai galat.
+    """
+    if not isinstance(value, str):
+        return DEFAULT_BOOK_TYPE
+    try:
+        return normalize_book_type(value)
+    except UnknownBookTypeError:
+        return DEFAULT_BOOK_TYPE
+
+
 def uses_markdown_content(book_type: str | None) -> bool:
     """Menyatakan apakah isi bab pada jenis buku ini disimpan sebagai Markdown."""
     return normalize_book_type(book_type) == NON_FICTION

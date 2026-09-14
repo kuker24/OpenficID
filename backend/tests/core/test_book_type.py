@@ -6,6 +6,7 @@ from app.core.book_type import (
     FICTION,
     NON_FICTION,
     UnknownBookTypeError,
+    book_type_or_default,
     is_book_type,
     normalize_book_type,
     uses_markdown_content,
@@ -54,6 +55,22 @@ def test_normalize_book_type_rejects_unknown_value(value: str) -> None:
 def test_unknown_book_type_error_lists_supported_values() -> None:
     with pytest.raises(UnknownBookTypeError, match="fiction, non_fiction"):
         normalize_book_type("novel")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("non_fiction", NON_FICTION),
+        ("fiction", FICTION),
+        ("novel", DEFAULT_BOOK_TYPE),
+        ("", DEFAULT_BOOK_TYPE),
+        (None, DEFAULT_BOOK_TYPE),
+        (123, DEFAULT_BOOK_TYPE),
+    ],
+)
+def test_book_type_or_default_never_raises(value: object, expected: str) -> None:
+    """Jalur yang tidak boleh berhenti karena satu kolom rusak memakai pembacaan bertoleransi ini."""
+    assert book_type_or_default(value) == expected
 
 
 def test_is_book_type_distinguishes_known_values() -> None:

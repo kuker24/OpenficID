@@ -58,8 +58,15 @@ def test_expired_export_is_not_downloadable(monkeypatch, tmp_path) -> None:
     assert not chapter_export_service.is_export_download_available(job)
 
 
-async def _create_project(client: AsyncClient, title: str = "Novel Uji") -> tuple[str, str]:
-    response = await client.post("/api/v1/projects", data={"title": title})
+async def _create_project(
+    client: AsyncClient,
+    title: str = "Novel Uji",
+    book_type: str = "fiction",
+) -> tuple[str, str]:
+    response = await client.post(
+        "/api/v1/projects",
+        data={"title": title, "book_type": book_type},
+    )
     assert response.status_code == 201
     project_id = response.json()["id"]
     volumes = (await client.get(f"/api/v1/projects/{project_id}/volumes")).json()
@@ -548,6 +555,193 @@ async def test_export_task_writes_pdf_and_serves_download(
     assert "Novel Uji-Lengkap-2026-07-28.pdf" in unquote(
         download_response.headers["content-disposition"]
     )
+
+
+NON_FICTION_CHAPTER = """# Bab 1: Paradoks Kepemimpinan
+
+### Pengantar
+
+Paragraf dengan *miring* dan **tebal**.
+
+| Dimensi | Nilai |
+| :--- | ---: |
+| **Otoritas** | 42 |
+
+1. Butir pertama.
+2. Butir kedua.
+
+- Butir berbutir
+
+> Kutipan penting.
+
+---
+
+```
+[ META-LEADER ]
+\u250c\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2510
+```
+"""
+
+
+@pytest.mark.asyncio
+async def test_docx_export_renders_markdown_structure_for_non_fiction(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Naskah non-fiksi harus menjadi struktur Word sungguhan, bukan tanda markdown mentah."""
+
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(
+        client, title="Buku Panduan", book_type="non_fiction"
+    )
+    await _create_chapter(
+        client,
+        project_id,
+        volume_id,
+        "Bab 1: Paradoks Kepemimpinan",
+        NON_FICTION_CHAPTER,
+        40,
+    )
+
+    _result, job = await _run_export_job(client, session, project_id, volume_id, "docx")
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id, "docx")
+    document = Document(str(output_path))
+
+    styles = {
+        paragraph.text: getattr(paragraph.style, "name", None)
+        for paragraph in document.paragraphs
+        if paragraph.text
+    }
+    # Judul markdown menjadi gaya Heading, bukan paragraf berisi tanda pagar.
+    assert styles["Pengantar"] == "Heading 5"
+    assert styles["Butir pertama."] == "List Number"
+    assert styles["Butir berbutir"] == "List Bullet"
+    assert styles["Kutipan penting."] == "Quote"
+    assert not any(text.startswith("#") for text in styles)
+    assert not any("**" in text for text in styles)
+
+    # Tabel markdown menjadi tabel Word sungguhan.
+    assert len(document.tables) == 1
+    table = document.tables[0]
+    assert [cell.text for cell in table.rows[0].cells] == ["Dimensi", "Nilai"]
+    assert [cell.text for cell in table.rows[1].cells] == ["Otoritas", "42"]
+
+    # Diagram bergaris kotak tetap utuh dan memakai huruf berlebar seragam.
+    code_paragraph = next(p for p in document.paragraphs if "META-LEADER" in p.text)
+    assert "\u250c\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2510" in code_paragraph.text
+    assert {run.font.name for run in code_paragraph.runs} == {"DejaVu Sans Mono"}
+
+
+@pytest.mark.asyncio
+async def test_docx_export_skips_heading_that_repeats_chapter_title(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Judul bab sudah ditulis dari medannya sendiri, jadi judul markdown kembar dibuang."""
+
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(
+        client, title="Buku Panduan", book_type="non_fiction"
+    )
+    await _create_chapter(
+        client,
+        project_id,
+        volume_id,
+        "Bab 1: Paradoks Meta-Kepemimpinan - Memimpin Mereka",
+        "# BAB 1: PARADOKS META-KEPEMIMPINAN: MEMIMPIN MEREKA\n\nIsi bab.",
+        8,
+    )
+
+    _result, job = await _run_export_job(client, session, project_id, volume_id, "docx")
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id, "docx")
+    document = Document(str(output_path))
+
+    headings = [
+        paragraph.text
+        for paragraph in document.paragraphs
+        if str(getattr(paragraph.style, "name", "")).startswith("Heading")
+    ]
+    # Hanya judul volume dan judul bab yang tersisa; judul markdown kembar tidak ikut tertulis.
+    assert headings == ["Volume 1", "Bab 1: Paradoks Meta-Kepemimpinan - Memimpin Mereka"]
+
+
+@pytest.mark.asyncio
+async def test_pdf_export_accepts_box_drawing_inside_code_block(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Diagram bergaris kotak memakai font berkas, sehingga tidak lagi digagalkan penjaga aksara."""
+
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(
+        client, title="Buku Panduan", book_type="non_fiction"
+    )
+    await _create_chapter(client, project_id, volume_id, "Bab 1", NON_FICTION_CHAPTER, 40)
+
+    result, job = await _run_export_job(client, session, project_id, volume_id, "pdf")
+
+    assert result["format"] == "pdf"
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id, "pdf")
+    assert output_path.read_bytes()[:5] == b"%PDF-"
+
+
+@pytest.mark.asyncio
+async def test_pdf_export_still_rejects_unsupported_script_in_prose(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Pengecualian font hanya berlaku di blok kode; aksara asing di prosa tetap ditolak."""
+
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(
+        client, title="Buku Panduan", book_type="non_fiction"
+    )
+    await _create_chapter(
+        client, project_id, volume_id, "Bab 1", "## Subbagian\n\nParagraf \u4e2d\u6587 di prosa.", 6
+    )
+
+    created = await client.post(
+        f"/api/v1/projects/{project_id}/chapter-exports",
+        json={
+            "selected_volume_ids": [volume_id],
+            "included_chapter_ids": [],
+            "excluded_chapter_ids": [],
+            "local_date": "2026-07-28",
+            "format": "pdf",
+        },
+    )
+    job = await background_service.get_job(session, created.json()["id"])
+    assert job is not None
+    job.status = "running"
+    await session.commit()
+
+    context = JobContext(session=session, job=job, publisher=BackgroundEventPublisher(None))
+    with pytest.raises(RuntimeError):
+        await dispatch_job(context)
 
 
 def test_pdf_guard_accepts_latin_prose_including_typography() -> None:

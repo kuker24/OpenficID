@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent_runtime.context.errors import ContextBuildError
 from app.agent_runtime.context.types import ContextMessage
-from app.core.book_type import NON_FICTION, UnknownBookTypeError, normalize_book_type
+from app.core.book_type import NON_FICTION, book_type_or_default
 from app.storage.repos import project_repo
 
 
@@ -57,10 +57,7 @@ async def build_project_profile(
     # Nilai jenis buku di luar daftar tidak boleh menggagalkan pembangunan konteks, sebab itu akan
     # menghentikan seluruh sesi agen hanya karena satu kolom yang tidak dapat dibaca. Penjaga format
     # isi bab mengambil sikap yang sama.
-    try:
-        if normalize_book_type(project.book_type) != NON_FICTION:
-            return None
-    except UnknownBookTypeError:
+    if book_type_or_default(project.book_type) != NON_FICTION:
         return None
 
     return ContextMessage(

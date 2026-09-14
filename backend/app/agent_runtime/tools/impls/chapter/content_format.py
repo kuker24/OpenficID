@@ -13,7 +13,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent_runtime.tools.errors import ToolExecutionError
-from app.core.book_type import UnknownBookTypeError, uses_markdown_content
+from app.core.book_type import NON_FICTION, is_book_type
 from app.core.markdown_markers import find_markdown_markers
 from app.storage.repos import project_repo
 
@@ -35,14 +35,13 @@ async def guard_chapter_content_format(
     project = await project_repo.get_by_id(session, project_id)
     if project is None:
         return
-    # Nilai jenis buku di luar daftar membuat penjaga melewatkan naskah daripada menolaknya atas
-    # dasar nilai yang tidak dapat dipercaya. Menolak penulisan di sini akan menghambat pekerjaan
-    # tanpa menjelaskan sebab yang sebenarnya, sedangkan melewatkannya hanya mengembalikan perilaku
-    # sebelum penjaga ini ada.
-    try:
-        if uses_markdown_content(project.book_type):
-            return
-    except UnknownBookTypeError:
+    # Jenis buku yang tidak dapat dibaca membuat penjaga melewatkan naskah, bukan memperlakukannya
+    # sebagai fiksi. Menolak penulisan atas dasar kolom yang tidak dapat dipercaya hanya akan
+    # menghambat pekerjaan tanpa menjelaskan sebab yang sebenarnya. Ini berbeda dari jalur ekspor
+    # dan pembangunan konteks, yang cukup memakai bawaan karena keduanya tidak menolak apa pun.
+    if not is_book_type(project.book_type):
+        return
+    if project.book_type == NON_FICTION:
         return
 
     markers = find_markdown_markers(content)
