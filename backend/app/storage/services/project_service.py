@@ -9,7 +9,8 @@ from datetime import UTC, datetime
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import NotFoundError
+from app.core.book_type import normalize_book_type
+from app.core.errors import ConflictError, NotFoundError
 from app.core.storage import delete_cover_file, save_cover_file
 from app.storage.models.project import Project
 from app.storage.repos import chapter_repo, project_repo, volume_repo
@@ -27,10 +28,21 @@ class ProjectListResult:
     page_size: int
 
 
+async def is_book_type_locked(session: AsyncSession, project_id: str) -> bool:
+    """Menyatakan apakah jenis buku sebuah proyek sudah tidak dapat diubah lagi.
+
+    Jenis buku menentukan format kanonik isi bab, sehingga mengubahnya setelah ada bab akan membuat
+    naskah tersimpan dibaca dengan format yang salah. Bab dihitung langsung dari tabelnya, bukan
+    dari `Project.chapter_count`, karena kolom itu berupa nilai singgahan yang disegarkan terpisah.
+    """
+    return await chapter_repo.count_by_project(session, project_id) > 0
+
+
 async def create_project(
     session: AsyncSession,
     title: str,
     description: str | None = None,
+    book_type: str | None = None,
     cover_file: UploadFile | None = None,
 ) -> Project:
     """
@@ -40,12 +52,20 @@ async def create_project(
         session: session basis data.
         title: Judul proyek.
         description: Ringkasan proyek, opsional.
+        book_type: Jenis buku, opsional. Bila kosong dipakai nilai bawaan.
         cover_file: File sampul, opsional.
 
     Returns:
         Instance proyek yang dibuat.
+
+    Raises:
+        UnknownBookTypeError: Jenis buku berisi namun tidak dikenal.
     """
-    project = Project(title=title, description=description)
+    project = Project(
+        title=title,
+        description=description,
+        book_type=normalize_book_type(book_type),
+    )
     project = await project_repo.create(session, project)
     await volume_service.create_default_volume(session, project.id)
 
@@ -118,6 +138,7 @@ async def update_project(
     project_id: str,
     title: str | None = None,
     description: str | None = None,
+    book_type: str | None = None,
     cover_file: UploadFile | None = None,
 ) -> Project:
     """
@@ -128,6 +149,7 @@ async def update_project(
         project_id: ID proyek.
         title: Judul baru, opsional.
         description: Ringkasan baru, opsional.
+        book_type: Jenis buku baru, opsional. Hanya diterima selama proyek belum punya bab.
         cover_file: File sampul baru, opsional.
 
     Returns:
@@ -135,6 +157,8 @@ async def update_project(
 
     Raises:
         NotFoundError: Proyek tidak ditemukan.
+        ConflictError: Jenis buku diubah padahal proyek sudah memiliki bab.
+        UnknownBookTypeError: Jenis buku berisi namun tidak dikenal.
     """
     project = await get_project(session, project_id)
 
@@ -142,6 +166,17 @@ async def update_project(
         project.title = title
     if description is not None:
         project.description = description
+    if book_type is not None:
+        requested = normalize_book_type(book_type)
+        # Permintaan yang mempertahankan nilai sekarang tidak perlu ditolak, karena formulir sunting
+        # mengirim ulang seluruh isinya termasuk jenis buku yang tidak disentuh pengguna.
+        if requested != project.book_type:
+            if await is_book_type_locked(session, project_id):
+                raise ConflictError(
+                    "Jenis buku tidak dapat diubah karena proyek sudah memiliki bab. "
+                    "Jenis buku menentukan format penyimpanan isi bab."
+                )
+            project.book_type = requested
 
     # Bila sampul baru disediakan, ganti sampul yang ada
     if cover_file:

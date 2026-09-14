@@ -231,6 +231,16 @@
     "titlePlaceholder": "Enter project title",
     "titleRequired": "Please enter a project title",
     "titleTooLong": "Title cannot exceed 200 characters",
+    "bookTypeLabel": "Book Type",
+    "bookType": {
+      "fiction": "Fiction",
+      "non_fiction": "Non-Fiction"
+    },
+    "bookTypeHint": {
+      "fiction": "Novels and stories. Chapters are written as flowing prose.",
+      "non_fiction": "Guides, textbooks, and research. Chapters may use section headings, tables, and lists."
+    },
+    "bookTypeLocked": "Book type cannot be changed because the project already has chapters.",
     "descriptionLabel": "Description",
     "descriptionPlaceholder": "Enter project description (optional)"
   },

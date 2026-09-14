@@ -5,12 +5,22 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Dialog, Button, Flex, Text, TextField, TextArea, Box } from "@radix-ui/themes";
+import {
+  Dialog,
+  Button,
+  Flex,
+  Text,
+  TextField,
+  TextArea,
+  Box,
+  SegmentedControl,
+} from "@radix-ui/themes";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
+import { BOOK_TYPES, DEFAULT_BOOK_TYPE, type BookType } from "@/lib/book-type.types";
 import type { Project } from "@/lib/project.types";
 
 import { CoverCropper } from "./cover-cropper";
@@ -23,7 +33,12 @@ interface ProjectFormDialogProps {
   /** Callback penutupan dialog */
   onOpenChange: (open: boolean) => void;
   /** Callback pengiriman formulir */
-  onSubmit: (data: { title: string; description?: string; cover?: File | null }) => void;
+  onSubmit: (data: {
+    title: string;
+    description?: string;
+    bookType: BookType;
+    cover?: File | null;
+  }) => void;
   /** Proyek yang sudah ada, diteruskan saat mode sunting */
   project?: Project | null;
   /** Status sedang memuat */
@@ -40,6 +55,9 @@ export function ProjectFormDialog({
   const { t } = useTranslation();
   const isEditMode = !!project;
   const [cover, setCover] = useState<File | null>(null);
+  const [bookType, setBookType] = useState<BookType>(DEFAULT_BOOK_TYPE);
+  // Jenis buku menentukan format penyimpanan isi bab, sehingga bab yang sudah ada menguncinya.
+  const bookTypeLocked = project?.bookTypeLocked ?? false;
 
   /** Schema validasi formulir */
   const projectFormSchema = z.object({
@@ -72,17 +90,20 @@ export function ProjectFormDialog({
         title: project.title,
         description: project.description ?? "",
       });
+      setBookType(project.bookType);
     } else if (open && !project) {
       reset({
         title: "",
         description: "",
       });
+      setBookType(DEFAULT_BOOK_TYPE);
     }
   }, [open, project, reset]);
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) {
       setCover(null);
+      setBookType(DEFAULT_BOOK_TYPE);
       reset({
         title: "",
         description: "",
@@ -93,7 +114,7 @@ export function ProjectFormDialog({
   };
 
   const handleFormSubmit = handleSubmit((data) => {
-    onSubmit({ ...data, cover });
+    onSubmit({ ...data, bookType, cover });
   });
 
   return (
@@ -158,6 +179,45 @@ export function ProjectFormDialog({
                     {errors.title.message}
                   </Text>
                 )}
+              </Box>
+
+              {/* Jenis buku */}
+              <Box>
+                <Text
+                  as="label"
+                  size="2"
+                  weight="medium"
+                  mb="1"
+                  style={{ display: "block" }}
+                >
+                  {t("projectForm.bookTypeLabel")}
+                </Text>
+                <SegmentedControl.Root
+                  size="1"
+                  value={bookType}
+                  onValueChange={(value) => setBookType(value as BookType)}
+                  disabled={bookTypeLocked}
+                  aria-label={t("projectForm.bookTypeLabel")}
+                >
+                  {BOOK_TYPES.map((candidate) => (
+                    <SegmentedControl.Item
+                      key={candidate}
+                      value={candidate}
+                    >
+                      {t(`projectForm.bookType.${candidate}`)}
+                    </SegmentedControl.Item>
+                  ))}
+                </SegmentedControl.Root>
+                <Text
+                  size="1"
+                  color="gray"
+                  mt="1"
+                  style={{ display: "block" }}
+                >
+                  {bookTypeLocked
+                    ? t("projectForm.bookTypeLocked")
+                    : t(`projectForm.bookTypeHint.${bookType}`)}
+                </Text>
               </Box>
 
               {/* Deskripsi */}

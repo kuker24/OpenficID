@@ -330,6 +330,62 @@ async def test_confirm_import_stream_rejects_over_limit_chapter_before_project_c
 
 
 @pytest.mark.asyncio
+async def test_confirm_import_defaults_to_fiction(client: AsyncClient) -> None:
+    """Jalur impor membangun proyeknya sendiri, jadi bawaan jenis buku harus ikut berlaku di sini."""
+    content = "第一章 序章\n\n" + "这是序章的内容。" * 30
+
+    response = await client.post(
+        "/api/v1/import/confirm",
+        files={"file": ("novel.txt", content.encode("utf-8"), "text/plain")},
+        data={"title": "Impor Tanpa Jenis"},
+    )
+    assert response.status_code == 201
+
+    project_id = response.json()["project_id"]
+    project = (await client.get(f"/api/v1/projects/{project_id}")).json()
+    assert project["book_type"] == "fiction"
+
+
+@pytest.mark.asyncio
+async def test_confirm_import_accepts_non_fiction(client: AsyncClient) -> None:
+    """Naskah non-fiksi juga dapat masuk lewat impor, bukan hanya lewat pembuatan proyek baru."""
+    content = "第一章 序章\n\n" + "这是序章的内容。" * 30
+
+    response = await client.post(
+        "/api/v1/import/confirm",
+        files={"file": ("panduan.md", content.encode("utf-8"), "text/markdown")},
+        data={"title": "Impor Non-Fiksi", "book_type": "non_fiction"},
+    )
+    assert response.status_code == 201
+
+    project_id = response.json()["project_id"]
+    project = (await client.get(f"/api/v1/projects/{project_id}")).json()
+    assert project["book_type"] == "non_fiction"
+
+
+@pytest.mark.asyncio
+async def test_confirm_import_stream_accepts_non_fiction(client: AsyncClient) -> None:
+    """Endpoint streaming memanggil layanan impor dari dalam generator, jadi diuji terpisah."""
+    content = "第一章 序章\n\n" + "这是序章的内容。" * 30
+
+    response = await client.post(
+        "/api/v1/import/confirm-stream",
+        files={"file": ("panduan.md", content.encode("utf-8"), "text/markdown")},
+        data={"title": "Impor Stream Non-Fiksi", "book_type": "non_fiction"},
+    )
+
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    complete_event = next(event for event in events if event["type"] == "complete")
+
+    project = (await client.get(f"/api/v1/projects/{complete_event['project_id']}")).json()
+    assert project["book_type"] == "non_fiction"
+
+
+@pytest.mark.asyncio
 async def test_preview_gbk_encoding(client: AsyncClient) -> None:
     """Uji deteksi dan penguraian berkas berenkode GBK."""
     content = "第一章 中文测试\n\n这是中文内容。"

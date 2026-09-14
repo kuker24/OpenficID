@@ -17,6 +17,7 @@ from app.api.schemas.import_schema import (
     PreviewChapter,
     PreviewVolume,
 )
+from app.core.book_type import BookType
 from app.core.project_import import (
     DEFAULT_IMPORT_CHUNK_SIZE,
     MAX_IMPORT_CHUNK_SIZE,
@@ -150,6 +151,9 @@ async def confirm_import(
     file: Annotated[UploadFile, File(description="Berkas TXT, Markdown, atau ZIP")],
     title: Annotated[str, Form(description="Judul buku")],
     description: Annotated[str | None, Form(description="Sinopsis")] = None,
+    book_type: Annotated[
+        BookType | None, Form(description="Jenis buku: fiction atau non_fiction")
+    ] = None,
     cover: Annotated[UploadFile | None, File(description="Gambar sampul")] = None,
     split_mode: Annotated[ImportSplitMode, Form(description="Mode pemisahan")] = "auto",
     chunk_size: Annotated[
@@ -216,6 +220,7 @@ async def confirm_import(
             description=description,
             cover_file=cover,
             volumes=parse_result.volumes,
+            book_type=book_type,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -236,6 +241,9 @@ async def confirm_import_stream(
     file: Annotated[UploadFile, File(description="Berkas TXT, Markdown, atau ZIP")],
     title: Annotated[str, Form(description="Judul buku")],
     description: Annotated[str | None, Form(description="Sinopsis")] = None,
+    book_type: Annotated[
+        BookType | None, Form(description="Jenis buku: fiction atau non_fiction")
+    ] = None,
     cover: Annotated[UploadFile | None, File(description="Gambar sampul")] = None,
     split_mode: Annotated[ImportSplitMode, Form(description="Mode pemisahan")] = "auto",
     chunk_size: Annotated[
@@ -310,6 +318,7 @@ async def confirm_import_stream(
                 description=description,
                 cover_file=cover,
                 volumes=parse_result.volumes,
+                book_type=book_type,
             )
 
             # Progres: menyimpan bab (progres simulasi, sebenarnya sudah selesai pada penyisipan massal)

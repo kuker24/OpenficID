@@ -123,6 +123,7 @@ export async function checkHealth(): Promise<HealthResponse> {
 // Project API
 // ============================================
 
+import { normalizeBookType } from "./book-type.types";
 import { CHAPTER_EXPORT_FORMATS } from "./chapter-export.types";
 import type {
   ChapterExport,
@@ -168,6 +169,8 @@ function transformProject(raw: Record<string, unknown>): Project {
     id: raw.id as string,
     title: raw.title as string,
     description: raw.description as string | null,
+    bookType: normalizeBookType(raw.book_type),
+    bookTypeLocked: raw.book_type_locked === true,
     wordCount: raw.word_count as number,
     chapterCount: raw.chapter_count as number,
     coverUrl: resolveBackendUrl(raw.cover_url as string | null | undefined),
@@ -270,6 +273,7 @@ export async function createProject(data: ProjectCreate): Promise<Project> {
   const formData = new FormData();
   formData.append("title", data.title);
   if (data.description) formData.append("description", data.description);
+  if (data.bookType) formData.append("book_type", data.bookType);
   if (data.cover) formData.append("cover", data.cover);
 
   const response = await apiClient.post("/projects", formData, {
@@ -285,6 +289,8 @@ export async function updateProject(projectId: string, data: ProjectUpdate): Pro
   const formData = new FormData();
   if (data.title !== undefined) formData.append("title", data.title || "");
   if (data.description !== undefined) formData.append("description", data.description || "");
+  // Nilai kosong tidak dikirim karena backend menolak jenis buku yang tak dikenal.
+  if (data.bookType) formData.append("book_type", data.bookType);
   if (data.cover) formData.append("cover", data.cover);
 
   const response = await apiClient.patch(`/projects/${projectId}`, formData, {

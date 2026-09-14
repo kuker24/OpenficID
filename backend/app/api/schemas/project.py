@@ -7,12 +7,17 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.core.book_type import DEFAULT_BOOK_TYPE, BookType
+
 
 class ProjectCreate(BaseModel):
     """Permintaan pembuatan proyek."""
 
     title: str = Field(min_length=1, max_length=200, description="Judul proyek")
     description: str | None = Field(default=None, description="Sinopsis proyek")
+    book_type: BookType = Field(
+        default=DEFAULT_BOOK_TYPE, description="Jenis buku: fiction atau non_fiction"
+    )
 
 
 class ProjectUpdate(BaseModel):
@@ -22,6 +27,9 @@ class ProjectUpdate(BaseModel):
         default=None, min_length=1, max_length=200, description="Judul proyek"
     )
     description: str | None = Field(default=None, description="Sinopsis proyek")
+    book_type: BookType | None = Field(
+        default=None, description="Jenis buku, hanya dapat diubah selama proyek belum punya bab"
+    )
 
 
 class ProjectResponse(BaseModel):
@@ -30,6 +38,10 @@ class ProjectResponse(BaseModel):
     id: str = Field(description="ID proyek")
     title: str = Field(description="Judul proyek")
     description: str | None = Field(description="Sinopsis proyek")
+    book_type: BookType = Field(description="Jenis buku: fiction atau non_fiction")
+    book_type_locked: bool = Field(
+        description="Jenis buku tidak dapat diubah lagi karena proyek sudah memiliki bab"
+    )
     word_count: int = Field(description="Jumlah kata terhitung")
     chapter_count: int = Field(description="Jumlah total bab")
     cover_url: str | None = Field(description="URL sampul")

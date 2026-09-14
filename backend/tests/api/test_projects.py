@@ -66,6 +66,41 @@ async def test_create_project_empty_title(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_project_defaults_to_fiction(client: AsyncClient) -> None:
+    """Klien lama tidak mengirim jenis buku, jadi permintaan tanpa field itu harus tetap diterima."""
+    response = await client.post(
+        "/api/v1/projects",
+        data={"title": "Novel Tanpa Jenis"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["book_type"] == "fiction"
+    assert data["book_type_locked"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_project_accepts_non_fiction(client: AsyncClient) -> None:
+    """Uji pembuatan proyek non-fiksi."""
+    response = await client.post(
+        "/api/v1/projects",
+        data={"title": "Buku Panduan", "book_type": "non_fiction"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["book_type"] == "non_fiction"
+
+
+@pytest.mark.asyncio
+async def test_create_project_rejects_unknown_book_type(client: AsyncClient) -> None:
+    """Jenis buku di luar daftar ditolak agar isi bab tidak tersimpan dengan format yang salah."""
+    response = await client.post(
+        "/api/v1/projects",
+        data={"title": "Novel Uji", "book_type": "novel"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_list_projects_empty(client: AsyncClient) -> None:
     """Uji pengambilan daftar proyek yang kosong."""
     response = await client.get("/api/v1/projects")
@@ -247,6 +282,90 @@ async def test_update_project_partial(client: AsyncClient) -> None:
     data = response.json()
     assert data["title"] == "Judul Baru"
     assert data["description"] == "Ringkasan asli"  # Ringkasan tidak berubah
+
+
+@pytest.mark.asyncio
+async def test_update_project_changes_book_type_while_project_has_no_chapter(
+    client: AsyncClient,
+) -> None:
+    """Selama belum ada bab, jenis buku masih bebas diperbaiki bila pengguna salah pilih."""
+    create_response = await client.post(
+        "/api/v1/projects",
+        data={"title": "Buku Uji"},
+    )
+    project_id = create_response.json()["id"]
+    assert create_response.json()["book_type"] == "fiction"
+
+    response = await client.patch(
+        f"/api/v1/projects/{project_id}",
+        data={"book_type": "non_fiction"},
+    )
+    assert response.status_code == 200
+    assert response.json()["book_type"] == "non_fiction"
+
+
+@pytest.mark.asyncio
+async def test_update_project_rejects_book_type_change_after_chapter_exists(
+    client: AsyncClient,
+) -> None:
+    """Jenis buku menentukan format isi bab, jadi bab yang sudah ada mengunci nilainya."""
+    create_response = await client.post(
+        "/api/v1/projects",
+        data={"title": "Buku Uji", "book_type": "non_fiction"},
+    )
+    project_id = create_response.json()["id"]
+    volumes = (await client.get(f"/api/v1/projects/{project_id}/volumes")).json()
+    chapter_response = await client.post(
+        f"/api/v1/projects/{project_id}/chapters",
+        json={
+            "volume_id": volumes[0]["id"],
+            "title": "Bab 1",
+            "content": "# Judul\n\nIsi bab.",
+            "word_count": 3,
+        },
+    )
+    assert chapter_response.status_code == 201
+
+    response = await client.patch(
+        f"/api/v1/projects/{project_id}",
+        data={"book_type": "fiction"},
+    )
+    assert response.status_code == 409
+    assert "tidak dapat diubah" in response.json()["detail"]
+
+    unchanged = await client.get(f"/api/v1/projects/{project_id}")
+    assert unchanged.json()["book_type"] == "non_fiction"
+    assert unchanged.json()["book_type_locked"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_project_accepts_unchanged_book_type_after_chapter_exists(
+    client: AsyncClient,
+) -> None:
+    """Formulir sunting mengirim ulang seluruh isinya, termasuk jenis buku yang tidak disentuh."""
+    create_response = await client.post(
+        "/api/v1/projects",
+        data={"title": "Buku Uji", "book_type": "non_fiction"},
+    )
+    project_id = create_response.json()["id"]
+    volumes = (await client.get(f"/api/v1/projects/{project_id}/volumes")).json()
+    await client.post(
+        f"/api/v1/projects/{project_id}/chapters",
+        json={
+            "volume_id": volumes[0]["id"],
+            "title": "Bab 1",
+            "content": "Isi bab.",
+            "word_count": 2,
+        },
+    )
+
+    response = await client.patch(
+        f"/api/v1/projects/{project_id}",
+        data={"title": "Judul Baru", "book_type": "non_fiction"},
+    )
+    assert response.status_code == 200
+    assert response.json()["title"] == "Judul Baru"
+    assert response.json()["book_type"] == "non_fiction"
 
 
 @pytest.mark.asyncio

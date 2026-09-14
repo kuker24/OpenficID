@@ -18,6 +18,7 @@ from app.api.schemas.project import (
     ProjectListResponse,
     ProjectResponse,
 )
+from app.core.book_type import BookType, normalize_book_type
 from app.core.errors import NotFoundError
 from app.core.storage import get_cover_url
 from app.storage.database import get_session
@@ -64,6 +65,8 @@ async def _list_project_checkpoint_thread_ids(
 async def create_project(
     title: Annotated[str, Form()],
     description: Annotated[str | None, Form()] = None,
+    # Klien lama tidak mengirim jenis buku, sehingga field ini tetap opsional dan jatuh ke bawaan.
+    book_type: Annotated[BookType | None, Form()] = None,
     cover: Annotated[UploadFile | None, File()] = None,
     session: AsyncSession = Depends(get_session),
 ) -> ProjectResponse:
@@ -73,6 +76,7 @@ async def create_project(
     Args:
         title: Judul proyek.
         description: Sinopsis proyek (opsional).
+        book_type: Jenis buku, fiction atau non_fiction (opsional).
         cover: Gambar sampul (opsional).
         session: Session basis data.
 
@@ -84,6 +88,7 @@ async def create_project(
         session,
         title=title,
         description=description,
+        book_type=book_type,
         cover_file=cover,
     )
     return _project_to_response(project)
@@ -175,6 +180,7 @@ async def update_project(
     project_id: str,
     title: Annotated[str | None, Form()] = None,
     description: Annotated[str | None, Form()] = None,
+    book_type: Annotated[BookType | None, Form()] = None,
     cover: Annotated[UploadFile | None, File()] = None,
     session: AsyncSession = Depends(get_session),
 ) -> ProjectResponse:
@@ -185,6 +191,7 @@ async def update_project(
         project_id: ID proyek.
         title: Judul baru (opsional).
         description: Sinopsis baru (opsional).
+        book_type: Jenis buku baru (opsional), hanya diterima selama proyek belum punya bab.
         cover: Gambar sampul baru (opsional).
         session: Session basis data.
 
@@ -192,7 +199,8 @@ async def update_project(
         Proyek setelah diperbarui.
 
     Raises:
-        HTTPException: Mengembalikan 404 bila proyek tidak ditemukan.
+        HTTPException: Mengembalikan 404 bila proyek tidak ditemukan. Penolakan perubahan jenis
+            buku dikembalikan sebagai 409 oleh penangan ConflictError global.
     """
     try:
         logger.info(f"Memperbarui proyek: {project_id}")
@@ -201,6 +209,7 @@ async def update_project(
             project_id,
             title=title,
             description=description,
+            book_type=book_type,
             cover_file=cover,
         )
         return _project_to_response(project)
@@ -264,6 +273,10 @@ def _project_to_response(project) -> ProjectResponse:
         id=project.id,
         title=project.title,
         description=project.description,
+        book_type=normalize_book_type(project.book_type),
+        # Penguncian ditentukan dari jumlah bab tersinggah agar penyusunan respons tidak menambah
+        # kueri per proyek saat daftar proyek dimuat.
+        book_type_locked=project.chapter_count > 0,
         word_count=project.word_count,
         chapter_count=project.chapter_count,
         cover_url=get_cover_url(project.cover_path),

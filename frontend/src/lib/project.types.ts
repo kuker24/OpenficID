@@ -4,6 +4,8 @@
  * Definisi tipe TypeScript terkait proyek, sepadan dengan Schema backend.
  */
 
+import type { BookType } from "./book-type.types";
+
 /**
  * Entitas proyek
  */
@@ -11,6 +13,9 @@ export interface Project {
   id: string;
   title: string;
   description: string | null;
+  bookType: BookType;
+  /** Jenis buku tidak dapat diubah lagi karena proyek sudah memiliki bab */
+  bookTypeLocked: boolean;
   wordCount: number;
   chapterCount: number;
   coverUrl: string | null;
@@ -24,6 +29,7 @@ export interface Project {
 export interface ProjectCreate {
   title: string;
   description?: string | null;
+  bookType?: BookType;
   cover?: File | null;
 }
 
@@ -33,6 +39,7 @@ export interface ProjectCreate {
 export interface ProjectUpdate {
   title?: string | null;
   description?: string | null;
+  bookType?: BookType | null;
   cover?: File | null;
 }
 

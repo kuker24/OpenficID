@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next";
 import { ConfirmDialog, Spinner, toast } from "@/components";
 import { MobileAppSidebarTrigger, useAppShell } from "@/features/app-shell";
 import { useMobileSidebarSwipe } from "@/hooks/use-mobile-sidebar-swipe";
+import type { BookType } from "@/lib/book-type.types";
 import type { Project } from "@/lib/project.types";
 
 import { ImportDialog } from "../components/import-dialog";
@@ -118,6 +119,7 @@ export function ProjectsPage() {
   const handleFormSubmit = async (formData: {
     title: string;
     description?: string;
+    bookType: BookType;
     cover?: File | null;
   }) => {
     try {

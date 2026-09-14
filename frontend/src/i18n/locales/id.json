@@ -231,6 +231,16 @@
     "titlePlaceholder": "Masukkan judul proyek",
     "titleRequired": "Silakan masukkan judul proyek",
     "titleTooLong": "Judul tidak boleh lebih dari 200 karakter",
+    "bookTypeLabel": "Jenis Buku",
+    "bookType": {
+      "fiction": "Fiksi",
+      "non_fiction": "Non-Fiksi"
+    },
+    "bookTypeHint": {
+      "fiction": "Novel dan cerita. Bab ditulis sebagai prosa mengalir.",
+      "non_fiction": "Buku panduan, ajar, dan ilmiah. Bab boleh memakai judul bagian, tabel, dan daftar."
+    },
+    "bookTypeLocked": "Jenis buku tidak dapat diubah karena proyek sudah memiliki bab.",
     "descriptionLabel": "Deskripsi",
     "descriptionPlaceholder": "Masukkan deskripsi proyek (opsional)"
   },

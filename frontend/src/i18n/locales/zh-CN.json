@@ -231,6 +231,16 @@
     "titlePlaceholder": "输入项目标题",
     "titleRequired": "请输入项目标题",
     "titleTooLong": "标题不能超过 200 个字符",
+    "bookTypeLabel": "书籍类型",
+    "bookType": {
+      "fiction": "虚构",
+      "non_fiction": "非虚构"
+    },
+    "bookTypeHint": {
+      "fiction": "小说与故事。章节以连贯散文写作。",
+      "non_fiction": "指南、教材与研究。章节可使用小节标题、表格与列表。"
+    },
+    "bookTypeLocked": "项目已有章节，书籍类型无法更改。",
     "descriptionLabel": "项目简介",
     "descriptionPlaceholder": "输入项目简介（可选）"
   },

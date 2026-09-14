@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.book_type import normalize_book_type
 from app.core.editor_content_limits import validate_editor_content
 from app.core.storage import save_cover_file
 from app.core.txt_parser import ParsedVolume
@@ -34,6 +35,7 @@ async def confirm_import(
     description: str | None,
     cover_file: UploadFile | None,
     volumes: list[ParsedVolume],
+    book_type: str | None = None,
 ) -> ImportResult:
     """
     Mengonfirmasi impor, membuat proyek dan semua bab.
@@ -44,9 +46,13 @@ async def confirm_import(
         description: Ringkasan, opsional.
         cover_file: File sampul, opsional.
         volumes: Daftar volume hasil parsing.
+        book_type: Jenis buku, opsional. Bila kosong dipakai nilai bawaan.
 
     Returns:
         Hasil impor.
+
+    Raises:
+        UnknownBookTypeError: Jenis buku berisi namun tidak dikenal.
     """
     for parsed_volume in volumes:
         for chapter in parsed_volume.chapters:
@@ -60,6 +66,7 @@ async def confirm_import(
     project = Project(
         title=title,
         description=description,
+        book_type=normalize_book_type(book_type),
         word_count=total_word_count,
         chapter_count=len(chapters),
     )
