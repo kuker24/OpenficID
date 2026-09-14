@@ -5,6 +5,7 @@ from app.chapter_export.renderers.base import (
     iter_export_chapters,
     normalize_chapter_content,
     publish_rendering_stage,
+    volume_export_heading,
     volume_number,
 )
 from app.chapter_export.renderers.docx import render_docx
@@ -26,5 +27,6 @@ __all__ = [
     "render_docx",
     "render_pdf",
     "render_txt",
+    "volume_export_heading",
     "volume_number",
 ]

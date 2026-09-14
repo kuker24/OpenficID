@@ -41,6 +41,20 @@ def volume_number(value: int) -> str:
     return str(value)
 
 
+def volume_export_heading(order: int, title: str) -> str:
+    """Menentukan judul volume yang ditulis ke berkas ekspor.
+
+    Judul volume sudah memuat penomorannya sendiri, misalnya "Volume 1" bagi volume bawaan,
+    sehingga menambahkan awalan lagi akan menghasilkan "Volume 1 Volume 1". Antarmuka menampilkan
+    judul apa adanya, dan ekspor mengikuti perilaku itu. Volume yang judulnya dikosongkan pengguna
+    tetap perlu penanda, karena itu nomor urut dipakai sebagai cadangan.
+    """
+    stripped = title.strip()
+    if stripped:
+        return stripped
+    return f"Volume {volume_number(order)}"
+
+
 def normalize_chapter_content(value: str) -> str:
     """Menyeragamkan akhir baris agar keluaran tidak bergantung pada asal teksnya."""
     return value.replace("\r\n", "\n").replace("\r", "\n")
@@ -98,7 +112,7 @@ async def iter_export_chapters(context, payload: dict[str, Any]) -> AsyncIterato
                     volume_title = group.get("title")
                     if not isinstance(order, int) or not isinstance(volume_title, str):
                         raise RuntimeError("Data volume pada tugas ekspor tidak valid")
-                    volume_heading = f"Volume {volume_number(order)} {volume_title}"
+                    volume_heading = volume_export_heading(order, volume_title)
                     last_group_id = group_id
 
             yield RenderedChapter(

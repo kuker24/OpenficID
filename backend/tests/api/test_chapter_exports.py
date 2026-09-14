@@ -28,6 +28,21 @@ def test_volume_numbers() -> None:
     assert chapter_export_service.volume_number(101) == "101"
 
 
+def test_volume_export_heading_keeps_stored_title() -> None:
+    """Judul volume sudah memuat penomorannya sendiri, jadi ekspor tidak menambah awalan lagi."""
+    assert chapter_export_service.volume_export_heading(1, "Volume 1") == "Volume 1"
+    assert chapter_export_service.volume_export_heading(2, "Volume Satu") == "Volume Satu"
+    assert chapter_export_service.volume_export_heading(3, "Bagian Pendahuluan") == (
+        "Bagian Pendahuluan"
+    )
+
+
+def test_volume_export_heading_falls_back_to_order_when_title_blank() -> None:
+    """Volume tanpa judul tetap memerlukan penanda agar batas antarvolume tidak hilang."""
+    assert chapter_export_service.volume_export_heading(4, "") == "Volume 4"
+    assert chapter_export_service.volume_export_heading(5, "   ") == "Volume 5"
+
+
 def test_expired_export_is_not_downloadable(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
     job = BackgroundJob(
@@ -270,8 +285,7 @@ async def test_export_task_writes_full_volume_txt_and_serves_download(
         download_response.headers["content-disposition"]
     )
     assert download_response.content.decode("utf-8-sig") == (
-        "Volume 1 Volume 1\n"
-        "Bab 1\nIsi bab 1\nBaris kedua\n\nBab 2\nIsi bab 2"
+        "Volume 1\nBab 1\nIsi bab 1\nBaris kedua\n\nBab 2\nIsi bab 2"
     )
     assert result == {
         "filename": "Novel Uji-Lengkap-2026-07-28.txt",
@@ -488,7 +502,7 @@ async def test_export_task_writes_docx_and_serves_download(
 
     document = Document(str(output_path))
     texts = [paragraph.text for paragraph in document.paragraphs if paragraph.text]
-    assert "Volume 1 Volume 1" in texts
+    assert "Volume 1" in texts
     assert texts.index("Bab 1") < texts.index("Bab 2")
     assert "Isi bab 1" in texts
     assert "Baris kedua" in texts
@@ -498,7 +512,7 @@ async def test_export_task_writes_docx_and_serves_download(
         for paragraph in document.paragraphs
         if paragraph.text
     }
-    assert styles["Volume 1 Volume 1"] == "Heading 1"
+    assert styles["Volume 1"] == "Heading 1"
     assert styles["Bab 1"] == "Heading 2"
 
 

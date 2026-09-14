@@ -22,6 +22,7 @@ from app.background.jobs.states import (
 )
 # Diteruskan kembali karena label volume kini milik penulis format, sementara pemanggil lama
 # masih membacanya dari modul layanan ini.
+from app.chapter_export.renderers.base import volume_export_heading as volume_export_heading
 from app.chapter_export.renderers.base import volume_number as volume_number
 from app.chapter_export.renderers.docx import render_docx
 from app.chapter_export.renderers.pdf import render_pdf
