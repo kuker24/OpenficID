@@ -1,4 +1,4 @@
-"""Logika pemilihan, penulisan berkas, dan pembersihan untuk tugas ekspor TXT bab."""
+"""Logika pemilihan, pengiriman ke penulis format, dan pembersihan tugas ekspor bab."""
 
 from __future__ import annotations
 
@@ -8,9 +8,8 @@ from datetime import UTC, datetime, timedelta
 import os
 from pathlib import Path
 import re
-from typing import Iterable
+from typing import Iterable, Literal
 
-import aiofiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.background.jobs import service as background_service
@@ -21,19 +20,53 @@ from app.background.jobs.states import (
     JOB_STATUS_RUNNING,
     JOB_STATUS_SUCCEEDED,
 )
+# Diteruskan kembali karena label volume kini milik penulis format, sementara pemanggil lama
+# masih membacanya dari modul layanan ini.
+from app.chapter_export.renderers.base import volume_number as volume_number
+from app.chapter_export.renderers.docx import render_docx
+from app.chapter_export.renderers.pdf import render_pdf
+from app.chapter_export.renderers.txt import render_txt
 from app.settings import settings
 from app.storage.repos import chapter_repo, project_repo, volume_repo
 
 
+ExportFormat = Literal["txt", "docx", "pdf"]
+
 EXPORT_JOB_TYPE = "chapter_export"
 EXPORT_FILE_PREFIX = "chapter-export-"
 EXPORT_FILE_TTL = timedelta(hours=24)
-EXPORT_BATCH_SIZE = 20
 EXPORT_PART_SUFFIX = ".part"
-# Setiap format keluaran baru wajib terdaftar di sini. Suffix yang tidak dikenal membuat berkasnya
-# terlewat oleh pembersihan berkala sehingga menumpuk di disk tanpa pernah kedaluwarsa.
-OUTPUT_SUFFIXES = frozenset({".txt"})
+DEFAULT_EXPORT_FORMAT = "txt"
+# Setiap format keluaran baru wajib terdaftar pada ketiga peta di bawah. Suffix yang tidak
+# terdaftar membuat berkasnya terlewat oleh pembersihan berkala sehingga menumpuk di disk tanpa
+# pernah kedaluwarsa, dan media type yang tidak terdaftar membuat unduhan salah tipe.
+FORMAT_SUFFIXES: dict[str, str] = {
+    "txt": ".txt",
+    "docx": ".docx",
+    "pdf": ".pdf",
+}
+FORMAT_MEDIA_TYPES: dict[str, str] = {
+    "txt": "text/plain; charset=utf-8",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
+}
+OUTPUT_SUFFIXES = frozenset(FORMAT_SUFFIXES.values())
 MANAGED_SUFFIXES = OUTPUT_SUFFIXES | {EXPORT_PART_SUFFIX}
+_RENDERERS = {
+    "txt": render_txt,
+    "docx": render_docx,
+    "pdf": render_pdf,
+}
+
+
+def normalize_export_format(value: object) -> str:
+    """Mengembalikan format yang dikenal, memakai TXT untuk tugas lama tanpa medan format."""
+    return value if isinstance(value, str) and value in FORMAT_SUFFIXES else DEFAULT_EXPORT_FORMAT
+
+
+def export_media_type(export_format: str) -> str:
+    """Mengambil media type unduhan untuk format ini."""
+    return FORMAT_MEDIA_TYPES.get(export_format, FORMAT_MEDIA_TYPES[DEFAULT_EXPORT_FORMAT])
 
 
 class ChapterExportSelectionError(ValueError):
@@ -82,6 +115,7 @@ class ChapterExportPlan:
 
     project_id: str
     filename: str
+    export_format: str
     mode: str
     chapters: list[ExportChapter]
     volumes: list[ExportVolume]
@@ -106,6 +140,7 @@ class ChapterExportPlan:
         return {
             "project_id": self.project_id,
             "filename": self.filename,
+            "format": self.export_format,
             "mode": self.mode,
             "chapters": [chapter.to_dict() for chapter in self.chapters],
             "volumes": [volume.to_dict() for volume in self.volumes],
@@ -121,11 +156,12 @@ def ensure_chapter_exports_dir() -> Path:
     return settings.chapter_exports_dir
 
 
-def export_file_paths(job_id: str) -> tuple[Path, Path]:
+def export_file_paths(job_id: str, export_format: str = DEFAULT_EXPORT_FORMAT) -> tuple[Path, Path]:
     """Mengembalikan path berkas sementara dan berkas hasil untuk tugas ini."""
     directory = ensure_chapter_exports_dir()
     basename = f"{EXPORT_FILE_PREFIX}{job_id}"
-    return directory / f"{basename}{EXPORT_PART_SUFFIX}", directory / f"{basename}.txt"
+    suffix = FORMAT_SUFFIXES.get(export_format, FORMAT_SUFFIXES[DEFAULT_EXPORT_FORMAT])
+    return directory / f"{basename}{EXPORT_PART_SUFFIX}", directory / f"{basename}{suffix}"
 
 
 def sanitize_filename_segment(value: str, fallback: str) -> str:
@@ -133,11 +169,6 @@ def sanitize_filename_segment(value: str, fallback: str) -> str:
     normalized = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", " ", value).strip().strip(".")
     normalized = re.sub(r"\s+", " ", normalized)
     return normalized[:120] or fallback
-
-
-def volume_number(value: int) -> str:
-    """Mengubah nomor urut volume menjadi label angka untuk judul volume."""
-    return str(value)
 
 
 async def create_export_plan(
@@ -148,6 +179,7 @@ async def create_export_plan(
     included_chapter_ids: Iterable[str],
     excluded_chapter_ids: Iterable[str],
     local_date: str,
+    export_format: str = DEFAULT_EXPORT_FORMAT,
 ) -> ChapterExportPlan:
     """Memvalidasi pilihan lalu membekukan lingkup, urutan, dan nama berkas ekspor."""
     project = await project_repo.get_by_id(session, project_id)
@@ -217,9 +249,12 @@ async def create_export_plan(
     else:
         filename_label = f"{len(selected_chapters)} Bab"
 
+    normalized_format = normalize_export_format(export_format)
+    suffix = FORMAT_SUFFIXES[normalized_format]
     return ChapterExportPlan(
         project_id=project_id,
-        filename=f"{project_title}-{filename_label}-{local_date}.txt",
+        filename=f"{project_title}-{filename_label}-{local_date}{suffix}",
+        export_format=normalized_format,
         mode=mode,
         chapters=[
             ExportChapter(
@@ -256,10 +291,12 @@ def get_export_summary(job: BackgroundJob) -> dict[str, object]:
         for chapter in payload.get("chapters", [])
         if isinstance(chapter, dict) and isinstance(chapter.get("id"), str)
     ]
+    export_format = normalize_export_format(payload.get("format"))
     return {
         "id": job.id,
         "status": job.status,
         "filename": payload.get("filename", "ekspor-bab.txt"),
+        "format": export_format,
         "mode": payload.get("mode", "chapters"),
         "volume_count": int(payload.get("volume_count", 0)),
         "chapter_count": int(payload.get("chapter_count", len(chapter_ids))),
@@ -277,86 +314,28 @@ def get_export_summary(job: BackgroundJob) -> dict[str, object]:
 
 
 async def write_chapter_export(context) -> dict[str, object]:
-    """Membaca isi utama bab bertahap lalu menuliskannya ke berkas TXT milik tugas ini."""
+    """Menulis berkas hasil ekspor memakai penulis yang sesuai format tugas ini.
+
+    Penulisan selalu menuju berkas sementara lalu dipindah secara atomik, sehingga berkas hasil
+    tidak pernah terlihat setengah jadi oleh titik akhir unduhan.
+    """
     payload = background_service.parse_json_object(context.job.payload_json)
     chapters = [item for item in payload.get("chapters", []) if isinstance(item, dict)]
-    volumes = [item for item in payload.get("volumes", []) if isinstance(item, dict)]
     if not chapters:
         raise ChapterExportSelectionError("Tugas ekspor tidak memiliki bab yang dapat diproses")
 
-    part_path, output_path = export_file_paths(context.job_id)
-    groups = {
-        chapter_id: volume
-        for volume in volumes
-        for chapter_id in volume.get("chapter_ids", [])
-        if isinstance(chapter_id, str)
-    }
-    mode = payload.get("mode")
-    written_count = 0
-    last_group_id: str | None = None
+    export_format = normalize_export_format(payload.get("format"))
+    part_path, output_path = export_file_paths(context.job_id, export_format)
+    renderer = _RENDERERS[export_format]
 
     try:
-        async with aiofiles.open(part_path, "w", encoding="utf-8-sig", newline="\n") as output:
-            for offset in range(0, len(chapters), EXPORT_BATCH_SIZE):
-                await context.check_cancelled()
-                batch = chapters[offset : offset + EXPORT_BATCH_SIZE]
-                ids = [item.get("id") for item in batch if isinstance(item.get("id"), str)]
-                loaded = await chapter_repo.get_by_ids(context.session, ids)
-                loaded_by_id = {chapter.id: chapter for chapter in loaded}
-                if len(loaded_by_id) != len(ids):
-                    raise RuntimeError("Bab yang diekspor sudah dihapus, silakan mulai ekspor ulang")
-
-                for item in batch:
-                    chapter_id = item.get("id")
-                    if not isinstance(chapter_id, str):
-                        raise RuntimeError("Data bab pada tugas ekspor tidak valid")
-                    chapter = loaded_by_id[chapter_id]
-                    title = item.get("title") if isinstance(item.get("title"), str) else chapter.title
-                    if mode == "volumes":
-                        group = groups.get(chapter_id)
-                        if not isinstance(group, dict):
-                            raise RuntimeError("Data volume pada tugas ekspor tidak valid")
-                        group_id = group.get("id")
-                        if not isinstance(group_id, str):
-                            raise RuntimeError("Data volume pada tugas ekspor tidak valid")
-                        if group_id != last_group_id:
-                            if written_count:
-                                await output.write("\n\n")
-                            order = group.get("order")
-                            volume_title = group.get("title")
-                            if not isinstance(order, int) or not isinstance(volume_title, str):
-                                raise RuntimeError("Data volume pada tugas ekspor tidak valid")
-                            await output.write(f"Volume {volume_number(order)} {volume_title}\n")
-                            last_group_id = group_id
-                        elif written_count:
-                            await output.write("\n\n")
-                    elif written_count:
-                        await output.write("\n\n")
-
-                    content = chapter.content.replace("\r\n", "\n").replace("\r", "\n")
-                    await output.write(f"{title}\n{content}")
-                    written_count += 1
-
-                last_title = batch[-1].get("title")
-                context.job = await background_service.update_progress(
-                    context.session,
-                    context.publisher,
-                    context.job,
-                    current=written_count,
-                    total=len(chapters),
-                    message="writing",
-                    extra_payload={
-                        "stage": "writing",
-                        "chapter_title": last_title if isinstance(last_title, str) else None,
-                    },
-                )
-                await context.commit()
-
+        await renderer(context, payload, part_path)
         await context.check_cancelled()
         await asyncio.to_thread(os.replace, part_path, output_path)
         expires_at = datetime.now(UTC) + EXPORT_FILE_TTL
         return {
             "filename": payload.get("filename", "ekspor-bab.txt"),
+            "format": export_format,
             "volume_count": payload.get("volume_count", 0),
             "chapter_count": len(chapters),
             "word_count": payload.get("word_count", 0),
@@ -403,6 +382,12 @@ async def cleanup_chapter_export_files(session: AsyncSession) -> int:
     return removed
 
 
+def export_format_of_job(job: BackgroundJob) -> str:
+    """Membaca format keluaran yang dibekukan pada payload tugas."""
+    payload = background_service.parse_json_object(job.payload_json)
+    return normalize_export_format(payload.get("format"))
+
+
 def is_export_download_available(job: BackgroundJob) -> bool:
     """Memeriksa apakah hasil tugas masih berada dalam masa berlaku unduhan."""
     if job.type != EXPORT_JOB_TYPE or job.status != JOB_STATUS_SUCCEEDED:
@@ -410,14 +395,17 @@ def is_export_download_available(job: BackgroundJob) -> bool:
     expires_at = _parse_datetime(background_service.parse_json_object(job.result_json).get("expires_at"))
     if expires_at is None or expires_at <= datetime.now(UTC):
         return False
-    _part_path, output_path = export_file_paths(job.id)
+    _part_path, output_path = export_file_paths(job.id, export_format_of_job(job))
     return output_path.is_file()
 
 
 async def _delete_export_files(job_id: str) -> None:
-    part_path, output_path = export_file_paths(job_id)
-    await asyncio.to_thread(part_path.unlink, missing_ok=True)
-    await asyncio.to_thread(output_path.unlink, missing_ok=True)
+    # Hook pembersihan hanya menerima id tugas, tanpa payload yang menyimpan formatnya, sehingga
+    # setiap kemungkinan berkas keluaran disapu agar tidak ada sisa saat tugas gagal atau dibatalkan.
+    directory = ensure_chapter_exports_dir()
+    basename = f"{EXPORT_FILE_PREFIX}{job_id}"
+    for suffix in (EXPORT_PART_SUFFIX, *sorted(OUTPUT_SUFFIXES)):
+        await asyncio.to_thread((directory / f"{basename}{suffix}").unlink, missing_ok=True)
 
 
 def _parse_datetime(value: object) -> datetime | None:

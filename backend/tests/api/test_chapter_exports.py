@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import json
 
 import pytest
+from docx import Document
 from httpx import AsyncClient
 from urllib.parse import unquote
 
@@ -13,6 +14,7 @@ from app.background.jobs import service as background_service
 from app.background.runtime.context import JobContext
 from app.background.runtime.dispatcher import dispatch_job
 from app.chapter_export import service as chapter_export_service
+from app.chapter_export.renderers import pdf as pdf_renderer
 from app.background.jobs.models import BackgroundJob
 from app.api.routers import chapter_exports as chapter_exports_router
 from app.storage.repos import chapter_repo
@@ -273,6 +275,7 @@ async def test_export_task_writes_full_volume_txt_and_serves_download(
     )
     assert result == {
         "filename": "Novel Uji-Lengkap-2026-07-28.txt",
+        "format": "txt",
         "volume_count": 1,
         "chapter_count": 2,
         "word_count": 10,
@@ -413,3 +416,223 @@ async def test_cleanup_removes_leftover_part_file_of_succeeded_export(
     assert await chapter_export_service.cleanup_chapter_export_files(session) == 1
     assert not part_path.exists()
     assert output_path.exists()
+
+
+async def _run_export_job(
+    client: AsyncClient,
+    session,
+    project_id: str,
+    volume_id: str,
+    export_format: str,
+) -> tuple[dict, BackgroundJob]:
+    """Menjalankan satu tugas ekspor sampai selesai lalu mengembalikan hasil dan catatan tugasnya."""
+    created = await client.post(
+        f"/api/v1/projects/{project_id}/chapter-exports",
+        json={
+            "selected_volume_ids": [volume_id],
+            "included_chapter_ids": [],
+            "excluded_chapter_ids": [],
+            "local_date": "2026-07-28",
+            "format": export_format,
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["format"] == export_format
+    job = await background_service.get_job(session, created.json()["id"])
+    assert job is not None
+    job.status = "running"
+    await session.commit()
+
+    context = JobContext(session=session, job=job, publisher=BackgroundEventPublisher(None))
+    result = await dispatch_job(context)
+    assert result is not None
+    await background_service.mark_succeeded(session, context.publisher, context.job, result=result)
+    await session.commit()
+    return result, job
+
+
+@pytest.mark.asyncio
+async def test_export_task_writes_docx_and_serves_download(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(client)
+    await _create_chapter(client, project_id, volume_id, "Bab 1", "Isi bab 1\r\nBaris kedua", 5)
+    await _create_chapter(client, project_id, volume_id, "Bab 2", "Isi bab 2", 5)
+
+    result, job = await _run_export_job(client, session, project_id, volume_id, "docx")
+
+    assert result["filename"] == "Novel Uji-Lengkap-2026-07-28.docx"
+    assert result["format"] == "docx"
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id, "docx")
+    assert output_path.exists()
+
+    download_response = await client.get(
+        f"/api/v1/projects/{project_id}/chapter-exports/{job.id}/download"
+    )
+    assert download_response.status_code == 200
+    assert download_response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert download_response.content[:4] == b"PK\x03\x04"
+    assert "Novel Uji-Lengkap-2026-07-28.docx" in unquote(
+        download_response.headers["content-disposition"]
+    )
+
+    document = Document(str(output_path))
+    texts = [paragraph.text for paragraph in document.paragraphs if paragraph.text]
+    assert "Volume 1 Volume 1" in texts
+    assert texts.index("Bab 1") < texts.index("Bab 2")
+    assert "Isi bab 1" in texts
+    assert "Baris kedua" in texts
+    assert "Isi bab 2" in texts
+    styles = {
+        paragraph.text: getattr(paragraph.style, "name", None)
+        for paragraph in document.paragraphs
+        if paragraph.text
+    }
+    assert styles["Volume 1 Volume 1"] == "Heading 1"
+    assert styles["Bab 1"] == "Heading 2"
+
+
+@pytest.mark.asyncio
+async def test_export_task_writes_pdf_and_serves_download(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(client)
+    await _create_chapter(client, project_id, volume_id, "Bab 1", "Isi bab 1\r\nBaris kedua", 5)
+    await _create_chapter(client, project_id, volume_id, "Bab 2", "Isi bab 2", 5)
+
+    result, job = await _run_export_job(client, session, project_id, volume_id, "pdf")
+
+    assert result["filename"] == "Novel Uji-Lengkap-2026-07-28.pdf"
+    assert result["format"] == "pdf"
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id, "pdf")
+    assert output_path.exists()
+
+    download_response = await client.get(
+        f"/api/v1/projects/{project_id}/chapter-exports/{job.id}/download"
+    )
+    assert download_response.status_code == 200
+    assert download_response.headers["content-type"] == "application/pdf"
+    assert download_response.content[:5] == b"%PDF-"
+    assert "Novel Uji-Lengkap-2026-07-28.pdf" in unquote(
+        download_response.headers["content-disposition"]
+    )
+
+
+def test_pdf_guard_accepts_latin_prose_including_typography() -> None:
+    """Aksen, tanda pisah, dan kutip cerdas lazim dalam prosa Indonesia dan harus lolos."""
+    accepted = "Ambigu tekad naïve café em—dash “kutip cerdas” ‘tunggal’ … 50°"
+    assert pdf_renderer.find_unsupported_characters(accepted) == []
+
+
+def test_pdf_guard_flags_characters_without_glyphs() -> None:
+    """Aksara di luar cakupan font bawaan harus terdeteksi sebelum berkas terbentuk."""
+    assert pdf_renderer.find_unsupported_characters("中文小说") == ["中", "文", "小", "说"]
+    assert pdf_renderer.find_unsupported_characters("emoji 😀") == ["😀"]
+
+
+@pytest.mark.asyncio
+async def test_pdf_export_fails_clearly_for_unsupported_script(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Naskah non-Latin harus menggagalkan tugas PDF, bukan menghasilkan berkas berisi kotak kosong."""
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(client)
+    await _create_chapter(client, project_id, volume_id, "Bab 1", "第一章的正文", 5)
+    created = await client.post(
+        f"/api/v1/projects/{project_id}/chapter-exports",
+        json={
+            "selected_volume_ids": [volume_id],
+            "included_chapter_ids": [],
+            "excluded_chapter_ids": [],
+            "local_date": "2026-07-28",
+            "format": "pdf",
+        },
+    )
+    job = await background_service.get_job(session, created.json()["id"])
+    assert job is not None
+    job.status = "running"
+    await session.commit()
+
+    context = JobContext(session=session, job=job, publisher=BackgroundEventPublisher(None))
+    with pytest.raises(RuntimeError) as failure:
+        await dispatch_job(context)
+
+    assert "Word" in str(failure.value)
+    part_path, output_path = chapter_export_service.export_file_paths(job.id, "pdf")
+    assert not part_path.exists()
+    assert not output_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_docx_export_accepts_script_rejected_by_pdf(
+    client: AsyncClient,
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Batas aksara hanya berlaku pada PDF, sedangkan DOCX menyimpan teks apa pun sebagai UTF-8."""
+    async def skip_cancellation_check(_context: JobContext) -> None:
+        return None
+
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    monkeypatch.setattr(JobContext, "check_cancelled", skip_cancellation_check)
+    project_id, volume_id = await _create_project(client)
+    await _create_chapter(client, project_id, volume_id, "Bab 1", "第一章的正文", 5)
+
+    result, job = await _run_export_job(client, session, project_id, volume_id, "docx")
+
+    assert result["format"] == "docx"
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id, "docx")
+    document = Document(str(output_path))
+    assert "第一章的正文" in [paragraph.text for paragraph in document.paragraphs]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_expired_output_for_every_format(
+    session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Berkas hasil setiap format wajib dikenali pembersihan berkala, bukan hanya TXT."""
+    monkeypatch.setattr(chapter_export_service.settings, "chapter_exports_dir", tmp_path)
+    expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    for index, export_format in enumerate(("txt", "docx", "pdf")):
+        job = BackgroundJob(
+            id=f"expired-{export_format}-{index}",
+            type=chapter_export_service.EXPORT_JOB_TYPE,
+            status="succeeded",
+            payload_json=json.dumps({"filename": f"uji.{export_format}", "format": export_format}),
+            result_json=json.dumps({"expires_at": expires_at.isoformat()}),
+        )
+        session.add(job)
+        await session.commit()
+        _part_path, output_path = chapter_export_service.export_file_paths(job.id, export_format)
+        output_path.write_text("kedaluwarsa", encoding="utf-8")
+
+        assert await chapter_export_service.cleanup_chapter_export_files(session) == 1
+        assert not output_path.exists()

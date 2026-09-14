@@ -4,6 +4,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from app.chapter_export.service import ExportFormat
+
 
 class ChapterExportCreate(BaseModel):
     """Membuat tugas ekspor bab."""
@@ -12,6 +14,8 @@ class ChapterExportCreate(BaseModel):
     included_chapter_ids: list[str] = Field(default_factory=list)
     excluded_chapter_ids: list[str] = Field(default_factory=list)
     local_date: date
+    # Klien lama tidak mengirim medan ini, jadi bawaannya wajib tetap TXT.
+    format: ExportFormat = "txt"
 
 
 class ChapterExportResponse(BaseModel):
@@ -20,6 +24,7 @@ class ChapterExportResponse(BaseModel):
     id: str
     status: str
     filename: str
+    format: ExportFormat
     mode: str
     volume_count: int
     chapter_count: int

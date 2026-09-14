@@ -9,6 +9,7 @@ from app.background.jobs.base import JobDefinition
 from app.background.jobs.constants import JOB_QUEUE_DEFAULT, JOB_TYPE_CHAPTER_EXPORT
 from app.background.runtime.context import JobContext
 from app.chapter_export import service as chapter_export_service
+from app.chapter_export.service import ExportFormat
 
 
 class ChapterExportChapterInput(BaseModel):
@@ -28,6 +29,8 @@ class ChapterExportVolumeInput(BaseModel):
 class ChapterExportInput(BaseModel):
     project_id: str
     filename: str
+    # Tugas yang dibuat sebelum format dapat dipilih tidak memuat medan ini.
+    format: ExportFormat = "txt"
     mode: str
     chapters: list[ChapterExportChapterInput] = Field(min_length=1)
     volumes: list[ChapterExportVolumeInput]
@@ -38,6 +41,7 @@ class ChapterExportInput(BaseModel):
 
 class ChapterExportResult(BaseModel):
     filename: str
+    format: ExportFormat = "txt"
     volume_count: int
     chapter_count: int
     word_count: int

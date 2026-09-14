@@ -35,6 +35,7 @@ async def create_chapter_export(
             included_chapter_ids=data.included_chapter_ids,
             excluded_chapter_ids=data.excluded_chapter_ids,
             local_date=data.local_date.isoformat(),
+            export_format=data.format,
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -101,10 +102,11 @@ async def download_chapter_export(
     job = await _get_export_job(session, project_id, job_id)
     if not chapter_export_service.is_export_download_available(job):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Berkas ekspor tidak tersedia atau sudah kedaluwarsa")
-    _part_path, output_path = chapter_export_service.export_file_paths(job.id)
+    export_format = chapter_export_service.export_format_of_job(job)
+    _part_path, output_path = chapter_export_service.export_file_paths(job.id, export_format)
     return FileResponse(
         output_path,
-        media_type="text/plain; charset=utf-8",
+        media_type=chapter_export_service.export_media_type(export_format),
         filename=str(chapter_export_service.get_export_summary(job)["filename"]),
     )
 
