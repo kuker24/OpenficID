@@ -14,6 +14,7 @@ from app.agent_runtime.revisions import (
     record_chapter_diffs,
 )
 from app.agent_runtime.tools.errors import ToolExecutionError
+from app.agent_runtime.tools.impls.chapter.content_format import guard_chapter_content_format
 from app.agent_runtime.tools.impls.chapter.diff_preview import (
     build_chapter_diff_preview,
     build_edit_chapter_tool_result_preview,
@@ -171,6 +172,9 @@ class EditChapterTool(AgentTool):
                     validate_editor_content(match.content)
                 except EditorContentLimitError as exc:
                     raise ToolExecutionError(str(exc)) from exc
+                # Diperiksa pada hasil penggantian, bukan pada potongan penggantinya, karena
+                # markdown dapat terbentuk dari gabungan teks lama dan teks baru.
+                await guard_chapter_content_format(session, self.project_id, match.content)
                 match.word_count = count_words(match.content)
             match.updated_at = datetime.now(UTC)
             await chapter_repo.update_chapter(session, match)

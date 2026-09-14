@@ -13,6 +13,7 @@ from app.agent_runtime.revisions import (
     record_chapter_diffs,
 )
 from app.agent_runtime.tools.errors import ToolExecutionError
+from app.agent_runtime.tools.impls.chapter.content_format import guard_chapter_content_format
 from app.agent_runtime.tools.impls.chapter.diff_preview import (
     build_chapter_diff_preview,
     build_write_chapter_tool_result_preview,
@@ -107,6 +108,9 @@ class WriteChapterTool(AgentTool):
             raise ToolExecutionError(str(exc)) from exc
         session = await create_session()
         try:
+            # Diperiksa sebelum kunci volume diambil, agar penolakan format tidak menahan penulis
+            # lain yang sedang menunggu volume yang sama.
+            await guard_chapter_content_format(session, self.project_id, content)
             volume = resolve_volume_from_list(
                 await volume_repo.list_by_project(session, self.project_id),
                 VolumeRef.model_validate(volume_ref),

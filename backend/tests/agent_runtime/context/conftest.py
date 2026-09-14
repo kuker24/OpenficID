@@ -1,14 +1,32 @@
+from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.agent_runtime.graph.state import AgentRuntimeState
+from app.core.book_type import FICTION
 
 
 @pytest.fixture
 def mock_session():
     """A mocked AsyncSession that returns AsyncMock for any awaited call."""
     return AsyncMock()
+
+
+@pytest.fixture(autouse=True)
+def _mock_project_profile_project():
+    """Menyediakan proyek fiksi bagi potongan konteks profil proyek.
+
+    Pembangunan konteks diuji dengan session tiruan, sehingga pencarian proyek yang sungguhan akan
+    mengembalikan coroutine alih-alih entitas. Bawaannya fiksi supaya potongan ini tidak muncul dan
+    susunan konteks yang sudah diasersi berkas uji lain tetap utuh. Uji yang memerlukan proyek
+    non-fiksi menimpa tiruan ini di dalam badan ujinya sendiri.
+    """
+    with patch(
+        "app.agent_runtime.context.parts.project_profile.project_repo.get_by_id",
+        new=AsyncMock(return_value=SimpleNamespace(id="proj_test", book_type=FICTION)),
+    ):
+        yield
 
 
 @pytest.fixture

@@ -406,6 +406,127 @@ async def test_edit_chapter_rejects_over_limit_replacement_without_updating_repo
     update_chapter.assert_not_awaited()
 
 
+async def test_write_chapter_rejects_markdown_on_fiction_project_without_creating() -> None:
+    """Penjaga format terpasang di alur penulisan, bukan hanya tersedia sebagai fungsi."""
+    from app.agent_runtime.tools.impls.chapter.write_chapter import WriteChapterTool
+
+    tool = WriteChapterTool(_state=_make_state())
+
+    with patch(
+        "app.agent_runtime.tools.impls.chapter.write_chapter.chapter_repo.create",
+        AsyncMock(),
+    ) as create_chapter:
+        result = await tool.ainvoke(
+            {
+                "volume_ref": {"type": "order", "value": 1},
+                "title": "Bab Bermarkdown",
+                "content": "# BAB 1: JUDUL\n\nIsi dengan **penegasan**.",
+            }
+        )
+
+    payload = json.loads(result)
+    assert payload["code"] == "validation_error"
+    assert "prosa polos" in payload["message"]
+    create_chapter.assert_not_awaited()
+
+
+async def test_write_chapter_allows_markdown_on_non_fiction_project() -> None:
+    """Proyek non-fiksi memakai markdown sebagai format kanonik, jadi penulisan harus lolos."""
+    from app.agent_runtime.tools.impls.chapter.write_chapter import WriteChapterTool
+
+    volume = _make_volume(chapter_count=0)
+    tool = WriteChapterTool(_state=_make_state())
+
+    async def create_chapter(_session, chapter):
+        chapter.id = "chap-new"
+        return chapter
+
+    with patch("app.agent_runtime.tools.impls.chapter.write_chapter.create_session") as mock_cs:
+        mock_cs.return_value = AsyncMock()
+        with (
+            patch(
+                "app.agent_runtime.tools.impls.chapter.content_format.project_repo.get_by_id",
+                AsyncMock(return_value=SimpleNamespace(id="proj-1", book_type="non_fiction")),
+            ),
+            patch(
+                "app.agent_runtime.tools.impls.chapter.write_chapter.volume_repo.list_by_project",
+                AsyncMock(return_value=[volume]),
+            ),
+            patch(
+                "app.agent_runtime.tools.impls.chapter.write_chapter.chapter_repo"
+            ) as mock_repo,
+            patch(
+                "app.agent_runtime.tools.impls.chapter.write_chapter.record_chapter_diffs",
+                AsyncMock(return_value=["chap-new"]),
+            ),
+            patch(
+                "app.agent_runtime.tools.impls.chapter.write_chapter.record_agent_activity_for_change",
+                AsyncMock(),
+            ),
+            patch(
+                "app.agent_runtime.tools.impls.chapter.write_chapter.refresh_volume_chapter_count",
+                AsyncMock(),
+            ),
+            patch(
+                "app.agent_runtime.tools.impls.chapter.write_chapter.refresh_project_stats",
+                AsyncMock(),
+            ),
+            patch("app.retrieval.chapter_index.safe_maybe_enqueue_auto_index", AsyncMock()),
+            patch(
+                "app.retrieval.index_status.schedule_emit_index_status",
+                lambda *_a, **_k: None,
+            ),
+            patch("app.background.jobs.service.commit_and_notify", AsyncMock()),
+        ):
+            mock_repo.get_max_order = AsyncMock(return_value=0)
+            mock_repo.create = AsyncMock(side_effect=create_chapter)
+            result = await tool.ainvoke(
+                {
+                    "volume_ref": {"type": "order", "value": 1},
+                    "title": "Bab Satu",
+                    "content": "## Subbagian\n\nIsi dengan **penegasan**.",
+                }
+            )
+
+    assert json.loads(result)["success"] is True
+
+
+async def test_edit_chapter_rejects_markdown_on_fiction_project_without_updating_repo() -> None:
+    """Penyuntingan juga dapat memasukkan markdown, jadi celah itu ikut ditutup."""
+    from app.agent_runtime.tools.impls.chapter.edit_chapter import EditChapterTool
+
+    volume = _make_volume()
+    chapter = _make_chapter(content="Isi asli")
+    tool = EditChapterTool(_state=_make_state())
+
+    with patch("app.agent_runtime.tools.impls.chapter.edit_chapter.create_session") as mock_cs:
+        mock_cs.return_value = AsyncMock()
+        with (
+            patch(
+                "app.agent_runtime.tools.impls.chapter.edit_chapter.volume_repo.list_by_project",
+                AsyncMock(return_value=[volume]),
+            ),
+            patch(
+                "app.agent_runtime.tools.impls.chapter.edit_chapter.chapter_repo.get_by_volume_ref",
+                AsyncMock(return_value=chapter),
+                create=True,
+            ),
+            patch(
+                "app.agent_runtime.tools.impls.chapter.edit_chapter.chapter_repo.update_chapter",
+                AsyncMock(),
+            ) as update_chapter,
+        ):
+            with pytest.raises(ToolExecutionError, match="prosa polos"):
+                await tool._execute(
+                    volume_ref={"type": "order", "value": 1},
+                    chapter_ref={"type": "order", "value": 1},
+                    old_content="Isi asli",
+                    new_content="## Subbagian\n\nIsi baru",
+                )
+
+    update_chapter.assert_not_awaited()
+
+
 async def test_write_chapter_insert_order_shifts_within_volume() -> None:
     from app.agent_runtime.tools.impls.chapter.write_chapter import WriteChapterTool
 

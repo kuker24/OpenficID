@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent_runtime.context.compaction.overlay import apply_compaction_overlay
 from app.agent_runtime.context.errors import ContextBuildError
 from app.agent_runtime.context.parts.history import build_history
+from app.agent_runtime.context.parts.project_profile import build_project_profile
 from app.agent_runtime.context.parts.rules import build_rules
 from app.agent_runtime.context.parts.skills import build_skills
 from app.agent_runtime.context.parts.system_prompt import build_system_prompt
@@ -44,6 +45,10 @@ async def build_context_parts(
     parts: list[ContextMessage] = []
     if prompt_messages := await build_system_prompt(state, agent_name, db_session):
         parts.extend(prompt_messages)
+    # Profil proyek ditempatkan setelah prompt bawaan karena isinya menggantikan ketentuan format
+    # bab di sana, namun sebelum aturan pengguna yang tetap memegang kata terakhir.
+    if (m := await build_project_profile(db_session, state.get("project_id"))) is not None:
+        parts.append(m)
     if (m := await build_rules(db_session, state.get("project_id"))) is not None:
         parts.append(m)
     if (m := await build_skills(state, agent_name, db_session, node_messages)) is not None:
