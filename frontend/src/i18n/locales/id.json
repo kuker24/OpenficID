@@ -367,7 +367,13 @@
       "previewTab": "Pratinjau",
       "previewWords": "{{count}} kata",
       "selectionInfo": "{{chapters}} bab dipilih, {{words}} kata",
-      "export": "Ekspor TXT",
+      "formatLabel": "Format ekspor",
+      "format": {
+        "txt": "TXT",
+        "docx": "Word",
+        "pdf": "PDF"
+      },
+      "export": "Ekspor {{format}}",
       "exporting": "Mengekspor bab",
       "cancelling": "Membatalkan ekspor",
       "preparing": "Menyiapkan tugas ekspor...",

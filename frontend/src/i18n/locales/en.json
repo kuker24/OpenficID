@@ -367,7 +367,13 @@
       "previewTab": "Preview",
       "previewWords": "{{count}} words",
       "selectionInfo": "{{chapters}} chapters selected, {{words}} words",
-      "export": "Export TXT",
+      "formatLabel": "Export format",
+      "format": {
+        "txt": "TXT",
+        "docx": "Word",
+        "pdf": "PDF"
+      },
+      "export": "Export {{format}}",
       "exporting": "Exporting chapters",
       "cancelling": "Cancelling export",
       "preparing": "Preparing the export task...",

@@ -123,7 +123,12 @@ export async function checkHealth(): Promise<HealthResponse> {
 // Project API
 // ============================================
 
-import type { ChapterExport, ChapterExportCreate } from "./chapter-export.types";
+import { CHAPTER_EXPORT_FORMATS } from "./chapter-export.types";
+import type {
+  ChapterExport,
+  ChapterExportCreate,
+  ChapterExportFormat,
+} from "./chapter-export.types";
 import type {
   Character,
   CharacterCreate,
@@ -201,11 +206,19 @@ export async function fetchProject(projectId: string): Promise<Project> {
   return transformProject(response.data);
 }
 
+function normalizeChapterExportFormat(raw: unknown): ChapterExportFormat {
+  // Tugas yang dibuat sebelum format dapat dipilih tidak menyertakan medan ini.
+  return CHAPTER_EXPORT_FORMATS.includes(raw as ChapterExportFormat)
+    ? (raw as ChapterExportFormat)
+    : "txt";
+}
+
 function transformChapterExport(raw: Record<string, unknown>): ChapterExport {
   return {
     id: raw.id as string,
     status: raw.status as string,
     filename: raw.filename as string,
+    format: normalizeChapterExportFormat(raw.format),
     mode: raw.mode as ChapterExport["mode"],
     volumeCount: Number(raw.volume_count ?? 0),
     chapterCount: Number(raw.chapter_count ?? 0),
@@ -232,6 +245,7 @@ export async function createChapterExport(
     included_chapter_ids: data.includedChapterIds,
     excluded_chapter_ids: data.excludedChapterIds,
     local_date: data.localDate,
+    format: data.format,
   });
   return transformChapterExport(response.data);
 }
